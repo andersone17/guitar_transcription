@@ -1,5 +1,50 @@
 # Manual testing
 
+## Stage 1 end to end with a real guitar recording
+
+The automated integration tests use synthesized audio. This procedure checks the whole Stage 1
+pipeline (audio → raw events → tempo → quantization → MusicXML) on a real guitar, with a reference
+you know exactly, so you can tell *which stage* is at fault when something is off.
+
+**Setup:** `uv sync --extra basic-pitch --extra tempo`, plus [MuseScore 4](https://musescore.org)
+(free) to view the result.
+
+**1. Record the reference take**, saved as `data/raw/g_major_ref.wav` (git-ignored):
+- Standard tuning, clean tone, one guitar, no other sound. Use a metronome **in headphones only**.
+- At ♩ = 80, play a G major scale in steady **eighth notes**: G2 A2 B2 C3 D3 E3 F#3 G3 A3 B3 C4 D4 E4 F#4
+  G4, then back down to G2. Let the last note ring for a bar.
+- Start the first note right on a click, about 0.1–0.2 s into the recording.
+
+**2. Stage by stage:**
+
+```bash
+# a) raw transcription only
+uv run guitar-transcribe transcribe data/raw/g_major_ref.wav --json outputs/ref.events.json
+
+# b) notation with the known tempo
+uv run guitar-transcribe transcribe data/raw/g_major_ref.wav \
+    --tempo 80 --time-signature 4/4 --grid eighth --musicxml outputs/ref_known.musicxml
+
+# c) notation with the estimated tempo
+uv run guitar-transcribe transcribe data/raw/g_major_ref.wav \
+    --auto-tempo --time-signature 4/4 --grid eighth --musicxml outputs/ref_auto.musicxml
+```
+
+**3. Check each stage** (a failure in an earlier stage explains failures in later ones):
+
+| Stage | Pass if | If it fails, the likely cause is |
+|---|---|---|
+| a) Transcription | 29 notes, pitches G2…G4…G2 in order; onsets about 0.375 s apart; no notes above D6 | Basic Pitch: missed low notes, octave errors, or extra notes from ringing strings. Try a cleaner or louder take. |
+| b) Known-tempo notation | 4–5 measures of 4/4 at ♩ = 80, all eighth notes (the last one longer), no chords, no rests between scale notes | Rhythm/notation. If notes are shifted by a constant amount, the take started late (the first downbeat is fixed at 0 s). |
+| c) Auto tempo | "Estimated tempo" within ~2% of 80, 160 or 40. Using the suggested value that's near 80 gives the same result as b) | Tempo estimation. 160 is expected here (every eighth note gets a beat); rerun with the suggested `--tempo`. |
+| Open in MuseScore | Title `g_major_ref`, one Guitar staff with a treble-8 clef, ♩ = 80, notes readable | MusicXML/viewer. Validate with the schema check below. |
+
+**4. Record the outcome** in a note in `docs/` (date, guitar, results per stage). A take that fails is a
+useful regression case: keep the WAV locally in `data/raw/`, never in git.
+
+Known Stage 1 behaviour that is **not** a failure: string/fret are unknown (no TAB); note lengths may
+look slightly short; `--auto-tempo` may report double or half time.
+
 ## Audio transcription on a real recording (Basic Pitch)
 
 Checks that real model inference works on your machine and that the output looks plausible for a

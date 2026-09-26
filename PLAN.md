@@ -63,8 +63,9 @@ src/guitar_transcription/
     notation/        # rendering views; no rhythm inference
         midi.py          performance MIDI export from raw seconds (no quantization; not built yet)
         musicxml.py      write_musicxml(QuantizedPerformance) via music21 (sole music21 importer)
-    pipeline.py      # wires audio -> events -> rhythm -> notation for a file
-    cli.py           # argparse entry point: `guitar-transcribe <command>` (`transcribe` exists)
+    pipeline.py      # Stage 1 wiring: detection_range, notate (tempo -> quantize -> single voice),
+                     #   write_events_json, write_notation. The only module that knows every stage.
+    cli.py           # argparse + reporting only: `guitar-transcribe transcribe ...` calls pipeline.py
 tests/               # mirrors package layout; tests/fixtures/ for tiny synthesized inputs
 data/                # git-ignored local datasets/recordings (README.md only is tracked)
 docs/                # design notes, research notes, dataset notes
@@ -155,7 +156,8 @@ Rhythm capability levels (each level keeps the same output types, so notation do
 2. **Automatic tempo / beat tracking** (possibly a varying beat grid). *Started 2026-09-26:* one global
    tempo from librosa beat tracking (`--auto-tempo`). Beat times are kept in `TempoEstimate` but not
    yet used to align the grid (no downbeat/phase), and there's no varying tempo.
-3. **Automatic meter / downbeat estimation.**
+3. **Automatic meter / downbeat estimation.** *Evaluated 2026-09-26: deferred; see "Meter inference:
+   findings" below. The time signature stays user-specified.*
 4. **Tempo and meter changes**, tuplet detection beyond a fixed grid, swing, and rubato.
 
 **Triplets (deferred, agreed 2026-09-26).** Today the grid only has straight subdivisions, so triplets are
@@ -185,6 +187,74 @@ performance, not the performance itself. As of M5 they are deliberately small:
 **How time zero maps to the grid (level 1):** second 0 of the recording is the downbeat of measure 1.
 There's no pickup and no lead-in offset, so silence before the first note is a leading rest.
 `quarters = seconds × quarter_note_bpm / 60`.
+
+### Meter inference: findings and decision (2026-09-26)
+
+**Decision: keep the time signature user-specified for the MVP (option C).** Don't implement meter
+inference now (A). Pursue downbeat tracking as the future route (B), but only once Stage 2 can measure
+it. No `MeterEstimator` was added: no candidate is both simple to integrate and reliable enough to
+be worth an interface today.
+
+**Four different problems** (only the first two are solved in this project):
+
+| Problem | Output | Status here |
+|---|---|---|
+| Tempo estimation | pulse rate (BPM) | `--auto-tempo` (librosa), with half/double ambiguity |
+| Beat tracking | pulse *times* | librosa beats (kept in `TempoEstimate`, not yet used for phase) |
+| Downbeat tracking | which beats start bars → bar length in beats + phase | none |
+| Meter inference | time signature: beats per bar **and** how beats subdivide (e.g. 3×2 vs 2×3 eighths) | user-specified |
+
+Downbeats give bar length and phase but not the time signature. **3/4 and 6/8** both have six
+eighths per bar, grouped 3×2 versus 2×3. The same audio can also be written as 2/4 or 4/4 (bar length
+vs. hypermeter), 4/4 or 2/2, swung 4/4 or 12/8, or 3/4 at double tempo instead of 6/8. Some of that is
+notational intent, not audible fact, and trained musicians disagree on it. Any estimator must return
+alternatives, not one answer.
+
+**Tools surveyed (Sep 2026):**
+
+| Tool | Beats | Downbeats | Meter | Status / fit |
+|---|---|---|---|---|
+| **Beat This!** (CPJKU, ISMIR 2024) | ✅ | ✅ | ✗ (derive from downbeats) | MIT code+checkpoints, active (May 2026). Needs PyTorch (~830 MB CPU-only) and numpy 2, which conflicts with TF 2.15/Basic Pitch (numpy < 2), so it would need a separate environment/process. Checkpoint (81 MB) is downloaded at runtime from a university server. |
+| madmom | ✅ | ✅ | among given candidates (`beats_per_bar=[3, 4]`) | No release since 2018 (repo still has commits). **Models CC BY-NC-SA (non-commercial).** Build issues on modern Python. |
+| BeatNet | ✅ | ✅ | ✅ (joint) | CC-BY-4.0. Pins numba 0.54 (Python < 3.10), so it can't be installed here. |
+| all-in-one (allin1) | ✅ | ✅ | ✗ | Needs demucs, NATTEN, madmom. Last push 2024. |
+| Essentia | ✅ | limited | ✗ | AGPL-3.0. |
+| librosa | ✅ | ✗ | ✗ | Already used for tempo. |
+| Symbolic, from our `PerformanceEvent`s (accent/onset periodicity at 2/3/4-beat lags, bass notes, chord changes) | n/a | possible | duple vs. triple | No dependencies. Literature reports useful but imperfect duple/triple discrimination on melodies. **Untested here.** |
+
+**Published evidence (Beat This! paper, arXiv 2407.21658):**
+- GuitarSet comping: beat F1 92.0, downbeat F1 88.1. This is 8-fold cross-validation, so it's *in-domain*
+  (GuitarSet is in its training data). Its three progressions (12-bar blues, Autumn Leaves, Pachelbel)
+  are conventionally 4/4. The dataset docs don't state meter; check the annotations in Stage 2.
+  Either way, this number says nothing about telling 3/4 from 4/4 on guitar.
+- Held-out GTZAN: beat F1 89.1, downbeat F1 78.3. Downbeats trail beats by about 11 points, and are
+  worst on classical/solo-style material.
+
+**Local probe** (`docs/research/meter_beat_this_experiment.py`): Beat This! on synthetic plucked-guitar
+accompaniment, 16 bars per meter. One example each, so it's indicative, not a benchmark.
+
+| Played | Beats | Downbeats | Meter derivable? |
+|---|---|---|---|
+| 4/4 bass/chord pattern, ♩=100 | ✅ 100.0 BPM | 14/21 on true bar starts; right for 10 bars, then a spurious 1+3 split | 4 by majority vote |
+| 3/4 waltz, ♩=120 | ✅ 120.0 BPM | ✗ 38 "downbeats" for 16 bars; nearly every beat is marked | **no** |
+| 6/8 arpeggio, dotted-♩=60 | pulse at 90.9 BPM (every 2 eighths) | ✅ 16/17 on true bar starts | bar right, grouping wrong: **reads as 3/4, not 6/8** |
+
+**Assessment for solo guitar:** there are no drums, so bar cues come from bass notes, harmony changes
+and accents, which vary by player and style. Pickups and rubato are common. Expect downbeat accuracy
+well below beat accuracy, and 3/4-vs-6/8 or 2/4-vs-4/4 decisions to be unreliable from audio alone.
+A wrong meter is worse than asking: every barline, tie and beam in the MusicXML depends on it.
+
+**What would change this decision / next steps:**
+1. The bigger practical gap is *phase*, not the meter label. Measure 1 starting at 0 s breaks any
+   recording with a lead-in or pickup. A user-specified first-downbeat offset (or pickup length) is
+   cheap and deterministic, and worth doing before any automatic downbeat work.
+2. In Stage 2, evaluate Beat This! (isolated environment/subprocess) and the dependency-free symbolic
+   baseline on annotated guitar data that includes real 3/4 and 6/8 material, not just GuitarSet's 4/4.
+3. Only if that shows useful accuracy, add a `MeterEstimator` returning ranked candidates
+   (beats per bar, grouping, first-downbeat time) that are shown as suggestions. It must never
+   silently override `--time-signature`, which stays supported.
+4. Revisit the integration cost when the Basic Pitch/TF stack is replaced (numpy 2 becomes possible),
+   which would let Beat This! run in-process.
 
 ## 3. Stage 1 plan: audio file → notation
 
@@ -327,20 +397,27 @@ upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real in
 - ✅ Notes crossing a barline come out as tied notes whose total duration equals the quantized duration.
 - ✅ Manual check (documented in `docs/`): a sample output opens in MuseScore 4 and reads sensibly.
 
-**M7 — Pipeline and CLI**
-- *Done early (2026-09-26):* `guitar-transcribe transcribe AUDIO [--json PATH]` prints raw events (onset,
-  offset, duration, MIDI, name, velocity) labeled as raw performance timing, and optionally writes
-  `performance-events` v1 JSON. It uses `AudioTranscriber` (Basic Pitch chosen in the CLI's wiring).
-  Exit codes: 0 ok, 2 bad input/usage, 1 transcription failure.
-- `guitar/tunings.py`: parse `--tuning` given low-to-high as players write it (`E2,A2,D3,G3,B3,E4`) into
-  `GuitarConfig.open_strings` order (string 1 first).
-- A pipeline subcommand (name TBD): `guitar-transcribe <cmd> INPUT.wav --out outputs/ [--tuning E2,A2,D3,G3,B3,E4]
-  [--capo N] [--tempo BPM] [--time-signature 4/4] [--onset-threshold …] [--frame-threshold …]`.
-- Writes `<name>.mid`, `<name>.musicxml`, and `<name>.events.json` (`performance-events` JSON; useful
-  for debugging and later evaluation).
-- ✅ End-to-end integration test on the synthesized fixture produces all three files.
-- ✅ README "Development" and "Usage" sections are updated with working commands.
-- ✅ No generated files appear in `git status` after running the pipeline.
+**M7 — Pipeline and CLI** — *integration path done 2026-09-26; tuning options and performance MIDI open*
+- `pipeline.py` holds the Stage 1 wiring, and the CLI only parses arguments and reports. One command
+  covers the whole path:
+  `guitar-transcribe transcribe AUDIO [--json PATH] [--full-range] [--musicxml PATH (--tempo BPM | --auto-tempo)
+  --time-signature N/D [--grid VALUE]]`. Exit codes: 0 ok, 2 bad input/usage, 1 processing failure.
+  (This replaces the earlier idea of a separate pipeline subcommand with `--out DIR`: the per-output
+  flags cover the same ground.)
+- Detection is limited to the instrument's range, `guitar.pitch_range(DEFAULT_GUITAR)` (E2–D6), passed to
+  the transcriber. `--full-range` disables this. It was found necessary by the end-to-end test, where
+  Basic Pitch reported G6/E6 ghost notes from string harmonics.
+- *Still open:* `guitar/tunings.py` + `--tuning/--capo/--max-fret` (so the range follows the real
+  instrument), `--onset-threshold/--frame-threshold`, and performance MIDI (M4).
+- ✅ Integration strategy in three tiers: fast unit tests; fast pipeline contract tests
+  (`tests/test_pipeline.py`: real rhythm and notation chained through `pipeline.py`, model faked through
+  our protocols, checking what crosses each boundary, including source-event identity); and opt-in
+  `-m integration` tests (`tests/test_stage1_end_to_end.py`: real Basic Pitch + librosa through the
+  CLI's `main`, synthesized melody → MusicXML with every note on its beat).
+- ✅ README "Stage 1 Quick Start" and "Stage 1 Limitations"; manual real-guitar procedure with
+  per-stage pass criteria in `docs/manual-testing.md`.
+- ✅ No generated files appear in `git status` after running the pipeline (outputs/ and data/ are ignored).
+- ⏳ Not done: running that manual procedure on a real reference recording (needs the user's guitar).
 
 **Stage 1 done when** M0–M7 pass, and a real recorded guitar clip (not committed) produces MusicXML
 that a guitarist judges roughly readable in MuseScore for simple monophonic and chordal material. The
@@ -404,6 +481,9 @@ Also later: chord-symbol inference, multi-voice notation.
   This must be verified before relying on audio onsets for audio/video alignment.
 - **Quantization without known tempo.** Stage 1 sidesteps this with user-supplied tempo and meter. Rubato
   and free playing will render poorly until the rhythm track matures.
+- **Meter and downbeat ambiguity.** 3/4 vs 6/8, 2/4 vs 4/4, 4/4 vs 12/8 swing, and where bar 1 starts
+  are partly notational choices and hard to hear on solo guitar. Downbeat trackers trail beat trackers
+  by ~10 F1 points even on ensemble music. Kept user-specified; see §2a.
 - **Unreliable offsets.** Transcribed note *ends* are much less precise than onsets (decay, let-ring,
   damping). Rhythm inference should lean on onsets, and notated durations may need musical rules
   (e.g. extend to the next onset) rather than raw offsets. Raw offsets are still preserved.
@@ -544,3 +624,20 @@ Also later: chord-symbol inference, multi-voice notation.
 - 2026-09-26 — Metrical-level ambiguity (half/double time) is surfaced, not hidden. On a real
   eighth-note scale, librosa reported ~201 BPM, and the CLI's suggested `--tempo 100.62` gave clean
   notation (better than a hand guess of 100, which merged two notes into a chord).
+- 2026-09-26 — **Meter stays user-specified for the MVP** (`--time-signature` required). The survey and
+  a local Beat This! probe showed reliable beats but unreliable downbeats on synthetic guitar: the 3/4
+  waltz failed, and 6/8 was read as 3/4. The best tool (Beat This!) also needs PyTorch and numpy 2,
+  which is incompatible with the TF 2.15 stack. No `MeterEstimator` was added. Next: a user-specified
+  first-downbeat/pickup option, then a Stage 2 evaluation of downbeat tracking and a symbolic baseline
+  on data that includes 3/4 and 6/8. Details in §2a "Meter inference: findings".
+- 2026-09-26 — Stage 1 wiring moved from `cli.py` into `pipeline.py` (as the module layout always
+  intended). The CLI keeps argument parsing, input validation before model load, and reporting.
+  Behaviour is unchanged: all existing CLI tests pass untouched, except that transcriber factories now
+  receive the detection range.
+- 2026-09-26 — By default the transcriber gets the standard 22-fret guitar's range (E2–D6). This is
+  physically grounded (`GuitarConfig`), not a guess, and it removes harmonic ghost notes. It trades
+  away notes below E2 (drop/7-string) and above D6 unless `--full-range` is given. Proper
+  `--tuning/--capo` options are the real fix.
+- 2026-09-26 — Integration tests use `tests/conftest.py`'s `write_plucked_notes` fixture (synthesized in
+  code), so no audio is committed. Measured: the full pipeline takes ~6 s for a 30 s clip on an 8-core
+  CPU (warm).

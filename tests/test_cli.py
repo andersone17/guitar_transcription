@@ -51,7 +51,7 @@ def audio_file(tmp_path: Path) -> Path:
 
 
 def run(argv: list[str], transcriber: FakeTranscriber) -> int:
-    return main(argv, make_transcriber=lambda: transcriber)
+    return main(argv, make_transcriber=lambda _pitch_range: transcriber)
 
 
 # --- help ---------------------------------------------------------------------------------
@@ -185,7 +185,7 @@ def test_directory_input(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
 def test_transcriber_is_not_built_for_invalid_input(tmp_path: Path) -> None:
     built = []
 
-    def factory() -> FakeTranscriber:
+    def factory(pitch_range: tuple[int, int] | None) -> FakeTranscriber:
         built.append(True)
         return FakeTranscriber()
 
@@ -221,7 +221,7 @@ def test_transcriber_errors_become_exit_codes(
 def test_backend_missing_during_construction(
     audio_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def factory() -> FakeTranscriber:
+    def factory(pitch_range: tuple[int, int] | None) -> FakeTranscriber:
         raise BackendUnavailableError("Basic Pitch is not installed. uv sync --extra basic-pitch")
 
     assert main(["transcribe", str(audio_file)], make_transcriber=factory) == EXIT_FAILURE
@@ -461,7 +461,7 @@ def run_with_tempo(
 ) -> int:
     return main(
         argv,
-        make_transcriber=lambda: transcriber or FakeTranscriber(NOTATION_EVENTS),
+        make_transcriber=lambda _pitch_range: transcriber or FakeTranscriber(NOTATION_EVENTS),
         make_tempo_estimator=lambda: estimator,
     )
 
@@ -496,7 +496,7 @@ def test_explicit_tempo_never_builds_an_estimator(audio_file: Path, tmp_path: Pa
     argv = ["transcribe", str(audio_file), "--tempo", "120", "--time-signature", "4/4"]
     code = main(
         [*argv, "--musicxml", str(tmp_path / "n.musicxml")],
-        make_transcriber=lambda: FakeTranscriber(NOTATION_EVENTS),
+        make_transcriber=lambda _pitch_range: FakeTranscriber(NOTATION_EVENTS),
         make_tempo_estimator=factory,
     )
 
@@ -543,3 +543,34 @@ def test_auto_tempo_warns_about_pulse_in_non_quarter_meters(
         == 0
     )
     assert "In 6/8 the pulse is often not a quarter note" in capsys.readouterr().err
+
+
+# --- detection range ------------------------------------------------------------------------
+
+
+def test_default_detection_range_is_a_standard_22_fret_guitar(
+    audio_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ranges = []
+
+    def factory(pitch_range: tuple[int, int] | None) -> FakeTranscriber:
+        ranges.append(pitch_range)
+        return FakeTranscriber()
+
+    assert main(["transcribe", str(audio_file)], make_transcriber=factory) == EXIT_OK
+    assert ranges == [(40, 86)]  # E2 (open low E) .. D6 (high E, fret 22)
+    assert "notes E2-D6" in capsys.readouterr().err
+
+
+def test_full_range_disables_the_limit(
+    audio_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ranges = []
+
+    def factory(pitch_range: tuple[int, int] | None) -> FakeTranscriber:
+        ranges.append(pitch_range)
+        return FakeTranscriber()
+
+    assert main(["transcribe", str(audio_file), "--full-range"], make_transcriber=factory) == 0
+    assert ranges == [None]
+    assert "full model range" in capsys.readouterr().err

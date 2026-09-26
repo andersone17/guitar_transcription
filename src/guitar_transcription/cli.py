@@ -1,13 +1,12 @@
 """Command-line entry point: ``guitar-transcribe``.
 
-This is wiring only: it validates arguments, chooses a transcription backend, and connects the
-stages: audio -> raw events -> (rhythm quantization -> MusicXML). It talks to backends through
-``AudioTranscriber``, never to a model package directly, and makes no musical decisions itself:
-tempo and meter come from the user, timing decisions from ``rhythm``, spelling from ``notation``.
+Argument parsing and reporting only: it validates input, chooses the default backends, and runs
+the stages through ``guitar_transcription.pipeline``. It talks to backends through the project's
+protocols (``AudioTranscriber``, ``TempoEstimator``), never to a model package directly, and makes
+no musical decisions itself.
 """
 
 import argparse
-import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -23,16 +22,21 @@ from guitar_transcription.audio.backends.basic_pitch import (
 )
 from guitar_transcription.audio.transcriber import check_audio_path
 from guitar_transcription.domain import PerformanceEvent
-from guitar_transcription.domain.serialization import events_to_dict
+from guitar_transcription.pipeline import (
+    NotationRequest,
+    NotationResult,
+    describe_range,
+    detection_range,
+    notate,
+    write_events_json,
+    write_notation,
+)
 from guitar_transcription.rhythm import (
     NoteValue,
     TempoEstimate,
     TempoEstimationError,
     TempoEstimator,
     TimeSignature,
-    quantize,
-    resolve_tempo,
-    to_single_voice,
 )
 from guitar_transcription.rhythm.backends.librosa_tempo import LibrosaTempoEstimator
 from guitar_transcription.rhythm.quantize import check_grid
@@ -46,14 +50,17 @@ TIMING_NOTE = (
     "Not quantized to beats or note values."
 )
 
-TranscriberFactory = Callable[[], AudioTranscriber]
+TranscriberFactory = Callable[[tuple[int, int] | None], AudioTranscriber]
+"""Builds the transcriber; receives the MIDI detection range (``None`` = the model's full range)."""
 TempoEstimatorFactory = Callable[[], TempoEstimator]
 
 
 def main(
     argv: Sequence[str] | None = None,
     *,
-    make_transcriber: TranscriberFactory = BasicPitchTranscriber,
+    make_transcriber: TranscriberFactory = lambda pitch_range: BasicPitchTranscriber(
+        pitch_range=pitch_range
+    ),
     make_tempo_estimator: TempoEstimatorFactory = LibrosaTempoEstimator,
 ) -> int:
     """Run the CLI and return an exit code. The factories let tests supply fakes."""
@@ -87,6 +94,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         help="also write the events to PATH as JSON, for later pipeline stages",
+    )
+    transcribe.add_argument(
+        "--full-range",
+        action="store_true",
+        help=(
+            "detect notes over the model's full range instead of a standard-tuned 22-fret "
+            f"guitar's ({describe_range(*detection_range())}); use for drop/extended tunings or "
+            "24-fret necks"
+        ),
     )
     notation = transcribe.add_argument_group(
         "notation",
@@ -190,9 +206,11 @@ def _transcribe(
     except (FileNotFoundError, UnsupportedAudioError) as error:
         return _fail(error, EXIT_BAD_INPUT)
 
-    print(f"Transcribing {path} ...", file=sys.stderr)
+    detect = None if args.full_range else detection_range()
+    scope = "full model range" if detect is None else f"notes {describe_range(*detect)}"
+    print(f"Transcribing {path} ({scope}) ...", file=sys.stderr)
     try:
-        events = make_transcriber().transcribe(path)
+        events = make_transcriber(detect).transcribe(path)
     except UnsupportedAudioError as error:  # e.g. the decoder couldn't read the file
         return _fail(error, EXIT_BAD_INPUT)
     except TranscriptionError as error:
@@ -200,15 +218,12 @@ def _transcribe(
 
     print(format_events_table(events))
 
-    json_path: Path | None = args.json
-    if json_path is not None:
+    if args.json is not None:
         try:
-            json_path.parent.mkdir(parents=True, exist_ok=True)
-            document = events_to_dict(events, source=str(path))
-            json_path.write_text(json.dumps(document, indent=2) + "\n")
+            write_events_json(events, args.json, source=str(path))
         except OSError as error:
             return _fail(error, EXIT_FAILURE)
-        print(f"Wrote {len(events)} events to {json_path}", file=sys.stderr)
+        print(f"Wrote {len(events)} events to {args.json}", file=sys.stderr)
 
     if args.musicxml is not None:
         return _write_notation(events, args, path, make_tempo_estimator)
@@ -221,54 +236,47 @@ def _write_notation(
     audio_path: Path,
     make_tempo_estimator: TempoEstimatorFactory,
 ) -> int:
-    # Imported here: music21 takes ~1 s to import and is only needed for notation output.
-    from guitar_transcription.notation.musicxml import write_musicxml
-
+    request = NotationRequest(args.time_signature, tempo_bpm=args.tempo, grid=_grid(args))
     try:
-        bpm, estimate = resolve_tempo(
+        result = notate(
+            events,
             audio_path,
-            explicit_bpm=args.tempo,  # an explicit tempo always wins; the estimator isn't built
-            estimator=make_tempo_estimator() if args.tempo is None else None,
+            request,
+            # Only built when needed: an explicit tempo always wins.
+            tempo_estimator=make_tempo_estimator() if args.tempo is None else None,
         )
     except TempoEstimationError as error:
         return _fail(error, EXIT_FAILURE)
-    if estimate is not None:
-        bpm = round(bpm, 2)  # beyond 0.01 BPM is noise; keeps the tempo mark readable
-        _report_estimate(estimate, bpm, args.time_signature)
+    if result.tempo_estimate is not None:
+        _report_estimate(result.tempo_estimate, result.tempo_bpm, request.time_signature)
 
-    quantized = quantize(
-        events,
-        quarter_note_bpm=bpm,
-        time_signature=args.time_signature,
-        grid=_grid(args),
-    )
-    voiced = to_single_voice(quantized)
-    original_duration = {id(event.source): event.duration_quarters for event in quantized.events}
-    shortened = sum(
-        1
-        for event in voiced.events
-        if event.duration_quarters != original_duration[id(event.source)]
-    )
-    dropped = len(quantized.events) - len(voiced.events)
     try:
-        args.musicxml.parent.mkdir(parents=True, exist_ok=True)
-        write_musicxml(voiced, args.musicxml, title=audio_path.stem)
+        write_notation(result, args.musicxml, title=audio_path.stem)
     except OSError as error:
         return _fail(error, EXIT_FAILURE)
+    _report_notation(result, args.musicxml)
+    return EXIT_OK
 
+
+def _report_notation(result: NotationResult, path: Path) -> None:
+    voiced = result.voiced
     print(
-        f"Wrote MusicXML to {args.musicxml}: {max(voiced.measure_count, 1)} measure(s) of "
-        f"{voiced.time_signature} at quarter = {bpm:g}, {_grid(args).name.lower()} grid",
+        f"Wrote MusicXML to {path}: {max(voiced.measure_count, 1)} measure(s) of "
+        f"{voiced.time_signature} at quarter = {result.tempo_bpm:g}, "
+        f"{voiced.grid.name.lower()} grid",
         file=sys.stderr,
     )
-    if dropped or shortened:
+    if result.dropped_count or result.shortened_count:
         print(
             "Note: single-voice notation shortened overlapping notes"
-            + (f" and dropped {dropped} duplicate pitch(es)" if dropped else "")
+            + (
+                f" and dropped {result.dropped_count} duplicate pitch(es)"
+                if result.dropped_count
+                else ""
+            )
             + "; raw timing is unchanged in the table/JSON.",
             file=sys.stderr,
         )
-    return EXIT_OK
 
 
 def _report_estimate(estimate: TempoEstimate, bpm: float, time_signature: TimeSignature) -> None:

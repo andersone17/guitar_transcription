@@ -139,6 +139,90 @@ tempo/beat tracking, meter estimation, and tempo/meter changes.
 
 Details, acceptance criteria, and open research questions are in [PLAN.md](PLAN.md).
 
+## Stage 1 Quick Start
+
+From a guitar recording to standard notation you can open in MuseScore. Read
+[Stage 1 Limitations](#stage-1-limitations) first so the results aren't a surprise.
+
+**1. Install** (Linux, macOS, or WSL, with [uv](https://docs.astral.sh/uv/); Python 3.11 is fetched automatically):
+
+```bash
+git clone <this repository> guitar_transcription && cd guitar_transcription
+uv sync --extra basic-pitch --extra tempo      # ~2 GB (TensorFlow); first run is slower
+```
+
+**2. Record** something that suits Stage 1:
+- **Solo guitar only:** no backing track, voice, drums, or metronome click bleeding in. Acoustic or
+  clean electric; heavy distortion and effects hurt.
+- **Standard tuning, up to fret 22** (E2–D6). For drop tunings, 7-string, or 24-fret playing, add
+  `--full-range`.
+- **A single melody or simple chords, at a steady tempo.** Start playing on beat 1, about 0.1 s in:
+  the recording's start is treated as the first downbeat, so a long silence or a pickup shifts every
+  barline.
+- **WAV or FLAC, 30 s or less, recorded close to the guitar.** Save it in `data/raw/`, which is
+  git-ignored.
+
+**3. Transcribe** and check the raw notes:
+
+```bash
+uv run guitar-transcribe transcribe data/raw/take1.wav
+```
+
+The table shows each detected note with its **raw** start/end in seconds. Check that the pitches match
+what you played before worrying about rhythm.
+
+**4. Generate MusicXML.** You supply the time signature. Give the tempo if you know it, or let it be
+estimated:
+
+```bash
+uv run guitar-transcribe transcribe data/raw/take1.wav \
+    --tempo 90 --time-signature 4/4 --musicxml outputs/take1.musicxml
+
+uv run guitar-transcribe transcribe data/raw/take1.wav \
+    --auto-tempo --time-signature 4/4 --musicxml outputs/take1.musicxml
+```
+
+With `--auto-tempo`, read the "Estimated tempo" line. If the notation looks twice too fast or slow,
+rerun with one of the `--tempo` values it suggests. For simple lines, `--grid eighth` often reads more
+cleanly than the default sixteenth grid.
+
+**5. Open it** in [MuseScore](https://musescore.org) (free) via File → Open → `outputs/take1.musicxml`,
+or in Finale, Dorico, Sibelius, and similar. Expect one "Guitar" staff in treble clef with a small 8
+below it, and no tablature yet.
+
+For a step-by-step check against a known recording, see
+[docs/manual-testing.md](docs/manual-testing.md#stage-1-end-to-end-with-a-real-guitar-recording).
+
+## Stage 1 Limitations
+
+Stage 1 is an audio-only baseline. Specifically, it:
+
+- **Doesn't know which string and fret you used.** The same pitch can be played in several places, and
+  audio alone can't tell them apart. `string`/`fret` stay empty, the output has **no tablature**, and
+  candidate positions are computed internally but never chosen.
+- **Doesn't use video.** Fretting-hand and picking-hand vision, which would resolve string/fret and
+  pick direction, are later stages.
+- **Requires you to give the meter.** `--time-signature` is mandatory. It isn't inferred, because
+  3/4 vs 6/8 and similar choices are unreliable from solo guitar audio (see PLAN.md §2a).
+- **Interprets rhythm only simply:**
+  - one constant tempo, and the first downbeat is fixed at 0 s, so there's no pickup support;
+  - notes snap to a straight grid, so triplets and swing come out wrong;
+  - output is a single voice: notes that ring over the next one are cut short, and a bass line
+    under a melody isn't shown separately;
+  - `--auto-tempo` can land on half or double time;
+  - note lengths come from the model's note ends, which are often early, so notes can look shorter
+    or more staccato than played.
+- **Doesn't handle expressive guitar techniques.** Bends, slides, hammer-ons, pull-offs, vibrato,
+  harmonics, palm muting and dead notes aren't detected or notated. They may show up as wrong or
+  extra notes: a bend can appear as two pitches, a harmonic as a high note.
+- **Uses a general-purpose model.** Basic Pitch isn't guitar-specific. Expect missed notes in dense
+  strums, occasional octave or ghost notes, and weaker results with distortion. Detection is limited
+  to a standard-tuned 22-fret guitar's range unless you pass `--full-range`.
+- **Isn't real-time.** It processes a finished recording file. Measured: about 6 s for a 30 s clip,
+  including model start-up, tempo estimation and MusicXML, on an 8-core CPU. The first run after
+  installing is slower while libraries compile.
+- **Doesn't export performance MIDI or chord symbols, and has no GUI.**
+
 ## Installation
 
 Requires [uv](https://docs.astral.sh/uv/) and Linux/macOS/WSL. Python is pinned to **3.11**; uv installs it
@@ -186,6 +270,8 @@ RAW PERFORMANCE TIMING: seconds from the start of the recording, as played. Not 
   come from the rhythm stage.
 - `velocity` is Basic Pitch's normalized note amplitude (0–1), not a calibrated confidence.
 - String/fret are not inferred at this stage.
+- Detection is limited to a standard-tuned 22-fret guitar's range (E2–D6), which removes ghost notes
+  from string harmonics. Add `--full-range` for drop/extended tunings or 24-fret playing.
 - Progress and errors go to stderr, and the table goes to stdout.
 - Exit codes: `0` success, `2` missing/unreadable input or bad arguments, `1` transcription failure
   (e.g. backend not installed).
@@ -270,11 +356,13 @@ uv run ruff check           # lint
 uv run ruff format --check  # formatting
 ```
 
-Real model inference is tested separately (needs the `basic-pitch` extra):
+Tests come in three tiers:
 
-```bash
-uv sync --extra basic-pitch
-uv run pytest -m integration    # real model inference on a synthesized clip
-```
+| Tier | Command | What it covers | Speed |
+|---|---|---|---|
+| Unit | `uv run pytest` | each module alone, with synthetic events or fakes | ~1 s total |
+| Pipeline contract | `uv run pytest` (in `tests/test_pipeline.py`) | the real rhythm and notation modules chained through `pipeline.py`, with only the model faked through our own protocols; checks what crosses each boundary | included above |
+| Integration | `uv run pytest -m integration` | real Basic Pitch and librosa, including audio → MusicXML through the actual CLI on a synthesized melody | ~10 s; needs `--extra basic-pitch --extra tempo` |
 
-To try it on your own recording, see [docs/manual-testing.md](docs/manual-testing.md).
+The default run skips integration tests. For a real guitar recording, follow
+[docs/manual-testing.md](docs/manual-testing.md).
