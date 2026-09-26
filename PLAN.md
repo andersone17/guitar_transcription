@@ -43,6 +43,7 @@ src/guitar_transcription/
         position.py      FretboardPosition (string, fret)
         events.py        PerformanceEvent, PickDirection (Technique added in Stage 8)
         performance.py   Performance (sorted events + GuitarConfig)
+        serialization.py raw events <-> JSON document ("performance-events" v1)
         evidence.py      AudioNoteEvidence (M3; later FrettingEvidence, PickingEvidence)
     guitar/          # instrument reasoning; pure Python
         positions.py     pitch_for_position, candidate_positions, pitch_range
@@ -57,7 +58,7 @@ src/guitar_transcription/
         midi.py          performance MIDI export from raw seconds (no quantization)
         musicxml.py      quantized rhythm output -> MusicXML via music21 (M6)
     pipeline.py      # wires audio -> events -> rhythm -> notation for a file
-    cli.py           # argparse entry point: `guitar-transcribe`
+    cli.py           # argparse entry point: `guitar-transcribe <command>` (`transcribe` exists)
 tests/               # mirrors package layout; tests/fixtures/ for tiny synthesized inputs
 data/                # git-ignored local datasets/recordings (README.md only is tracked)
 docs/                # design notes, research notes, dataset notes
@@ -286,11 +287,15 @@ upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real in
 - ✅ Manual check (documented in `docs/`): a sample output opens in MuseScore 4 and reads sensibly.
 
 **M7 — Pipeline and CLI**
+- *Done early (2026-09-26):* `guitar-transcribe transcribe AUDIO [--json PATH]` prints raw events (onset,
+  offset, duration, MIDI, name, velocity) labeled as raw performance timing, and optionally writes
+  `performance-events` v1 JSON. It uses `AudioTranscriber` (Basic Pitch chosen in the CLI's wiring).
+  Exit codes: 0 ok, 2 bad input/usage, 1 transcription failure.
 - `guitar/tunings.py`: parse `--tuning` given low-to-high as players write it (`E2,A2,D3,G3,B3,E4`) into
   `GuitarConfig.open_strings` order (string 1 first).
-- `guitar-transcribe INPUT.wav --out outputs/ [--tuning E2,A2,D3,G3,B3,E4] [--capo N] [--strings N]
-  [--tempo BPM] [--time-signature 4/4] [--onset-threshold …] [--frame-threshold …]`.
-- Writes `<name>.mid`, `<name>.musicxml`, and `<name>.events.json` (the `Performance` serialized; useful
+- A pipeline subcommand (name TBD): `guitar-transcribe <cmd> INPUT.wav --out outputs/ [--tuning E2,A2,D3,G3,B3,E4]
+  [--capo N] [--tempo BPM] [--time-signature 4/4] [--onset-threshold …] [--frame-threshold …]`.
+- Writes `<name>.mid`, `<name>.musicxml`, and `<name>.events.json` (`performance-events` JSON; useful
   for debugging and later evaluation).
 - ✅ End-to-end integration test on the synthesized fixture produces all three files.
 - ✅ README "Development" and "Usage" sections are updated with working commands.
@@ -436,3 +441,12 @@ Also later: chord-symbol inference, multi-voice notation.
   and reported as `UnsupportedAudioError`, which avoids importing those libraries. Other failures raise
   `TranscriptionError`, and backend output that violates domain invariants raises instead of being repaired.
 - 2026-09-26 — pytest excludes `integration` tests by default (`-m "not integration"` in addopts).
+- 2026-09-26 — The CLI uses subcommands (`guitar-transcribe transcribe …`) so raw transcription, and later
+  the full pipeline, evaluation, etc., live under one entry point. It's plain argparse, with no CLI dependency.
+- 2026-09-26 — Event JSON serialization lives in `domain/serialization.py` (stdlib `json`-ready dicts):
+  it's the hand-off format between stages. It's self-describing (`format`, `version`,
+  `timing: raw-performance-seconds`), writes unknowns as `null`, omits derived values, and the loader
+  re-validates every event and rejects unknown fields/versions.
+- 2026-09-26 — The Basic Pitch adapter silences known-irrelevant backend chatter (TF C++ logs via
+  `TF_CPP_MIN_LOG_LEVEL` default 3, optional-runtime warnings, `pkg_resources` and decoder-fallback
+  warnings), so CLI stderr shows only our progress and errors. Real failures still raise.

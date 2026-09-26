@@ -18,7 +18,10 @@ Everything else (string, fret, pick direction, confidences) stays ``None``.
 import contextlib
 import importlib
 import io
+import logging
 import operator
+import os
+import warnings
 from collections.abc import Sequence
 from os import PathLike
 from typing import Any
@@ -94,8 +97,11 @@ class BasicPitchTranscriber:
     def transcribe(self, audio_path: str | PathLike[str]) -> list[PerformanceEvent]:
         path = check_audio_path(audio_path, SUPPORTED_SUFFIXES)
         try:
-            # predict() prints a progress line to stdout; keep library chatter out of our output.
-            with contextlib.redirect_stdout(io.StringIO()):
+            # predict() prints a progress line to stdout, and librosa warns when it falls back
+            # between decoders; failures are reported by our own error below instead.
+            with contextlib.redirect_stdout(io.StringIO()), warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="PySoundFile failed")
+                warnings.filterwarnings("ignore", category=FutureWarning, module="librosa")
                 _, _, note_events = self._inference.predict(
                     path, model_or_model_path=self._model, **self._predict_kwargs
                 )
@@ -139,8 +145,9 @@ def note_events_to_performance_events(
 
 def _load_backend() -> tuple[Any, Any]:
     try:
-        inference = importlib.import_module("basic_pitch.inference")
-        model_path = importlib.import_module("basic_pitch").ICASSP_2022_MODEL_PATH
+        with _quiet_backend_import():
+            inference = importlib.import_module("basic_pitch.inference")
+            model_path = importlib.import_module("basic_pitch").ICASSP_2022_MODEL_PATH
     except ImportError as error:
         raise BackendUnavailableError(INSTALL_HINT) from error
     try:
@@ -154,3 +161,21 @@ def _load_backend() -> tuple[Any, Any]:
 
 def _midi_to_hz(pitch: int) -> float:
     return 440.0 * 2.0 ** ((pitch - 69) / 12)
+
+
+@contextlib.contextmanager
+def _quiet_backend_import() -> Any:
+    """Silence known-irrelevant import chatter: TensorFlow's C++ startup logs (CUDA/oneDNN/CPU
+    notices), Basic Pitch's warnings about optional runtimes we don't use, and resampy's
+    ``pkg_resources`` deprecation warning. Real errors still raise. An explicit
+    ``TF_CPP_MIN_LOG_LEVEL`` set by the user is respected.
+    """
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    previous_disable = logging.root.manager.disable
+    logging.disable(logging.WARNING)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+            yield
+    finally:
+        logging.disable(previous_disable)

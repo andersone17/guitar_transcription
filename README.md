@@ -3,7 +3,8 @@
 A research/engineering project toward **multimodal automatic guitar transcription**: turning a recording
 of a guitarist, both audio and video, into standard notation and tablature that shows *what was actually played*.
 
-> **Current status: Stage 1 (audio-only), milestone M0 (project skeleton) done.** No transcription code yet. See [PLAN.md](PLAN.md).
+> **Current status: Stage 1 (audio-only).** Audio → raw note events works from the command line
+> (see [Usage](#usage)). Rhythm quantization, MIDI, and notation export are next. See [PLAN.md](PLAN.md).
 
 ## Motivation
 
@@ -135,6 +136,76 @@ tempo/beat tracking, meter estimation, and tempo/meter changes.
 
 Details, acceptance criteria, and open research questions are in [PLAN.md](PLAN.md).
 
+## Installation
+
+Requires [uv](https://docs.astral.sh/uv/) and Linux/macOS/WSL. Python is pinned to **3.11**; uv installs it
+if needed.
+
+```bash
+git clone <this repository> guitar_transcription
+cd guitar_transcription
+uv sync --extra basic-pitch    # package + dev tools + Basic Pitch backend (TensorFlow 2.15, ~2 GB)
+```
+
+Without `--extra basic-pitch` everything installs and the tests run, but `transcribe` will exit with
+an error that tells you how to install the backend. Note that a later plain `uv sync` *removes* the
+extra, so keep passing `--extra basic-pitch`.
+
+## Usage
+
+Transcribe an audio file (`.wav`, `.flac`, `.ogg`; `.mp3`/`.m4a` may need `ffmpeg`) into raw note events:
+
+```bash
+uv run guitar-transcribe transcribe path/to/audio.wav
+uv run guitar-transcribe transcribe path/to/audio.wav --json outputs/audio.events.json
+uv run guitar-transcribe transcribe --help
+```
+
+(`uv run` uses the project environment. After `source .venv/bin/activate`, `guitar-transcribe ...`
+works directly.)
+
+Example output:
+
+```text
+RAW PERFORMANCE TIMING: seconds from the start of the recording, as played. Not quantized to beats or note values.
+
+  onset_s  offset_s  duration_s  midi  note  velocity
+    0.499     0.975       0.476    55  G3        0.86
+    0.998     1.474       0.476    60  C4        0.84
+    1.498     1.962       0.464    64  E4        0.77
+    1.998     2.474       0.476    67  G4        0.87
+
+4 notes detected.
+```
+
+- Times are **raw performance timing** in seconds. There are no beats, bars, or note values yet; those
+  come from the rhythm stage.
+- `velocity` is Basic Pitch's normalized note amplitude (0–1), not a calibrated confidence.
+- String/fret are not inferred at this stage.
+- Progress and errors go to stderr, and the table goes to stdout.
+- Exit codes: `0` success, `2` missing/unreadable input or bad arguments, `1` transcription failure
+  (e.g. backend not installed).
+
+`--json` writes the events for later pipeline stages. The format is `guitar-transcription/performance-events`,
+version 1, defined in `src/guitar_transcription/domain/serialization.py`. Every event field is written,
+with `null` for unknowns:
+
+```json
+{
+  "format": "guitar-transcription/performance-events",
+  "version": 1,
+  "timing": "raw-performance-seconds",
+  "source": "path/to/audio.wav",
+  "events": [
+    {"onset_seconds": 0.4992, "offset_seconds": 0.9752, "pitch_midi": 55, "velocity": 0.8558,
+     "string": null, "fret": null, "pick_direction": null, "audio_confidence": null,
+     "fretting_confidence": null, "picking_confidence": null, "confidence": null}
+  ]
+}
+```
+
+Keep recordings in `data/raw/` and outputs in `outputs/`. Both are git-ignored.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/). Python is pinned to **3.11** (see PLAN.md, "Decision log").
@@ -147,10 +218,10 @@ uv run ruff check           # lint
 uv run ruff format --check  # formatting
 ```
 
-Audio transcription uses Spotify Basic Pitch as an optional extra (it pulls in TensorFlow 2.15):
+Real model inference is tested separately (needs the `basic-pitch` extra):
 
 ```bash
-uv sync --extra basic-pitch     # a later plain `uv sync` removes it again
+uv sync --extra basic-pitch
 uv run pytest -m integration    # real model inference on a synthesized clip
 ```
 
