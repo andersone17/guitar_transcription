@@ -108,9 +108,9 @@ information hooks for later tablature work, without choosing fingerings.
 | Transcription backend | `basic-pitch==0.4.0` | optional extra `basic-pitch` | Pretrained polyphonic AMT, Apache-2.0, returns note events directly |
 | MusicXML writing | `music21>=10` | core | Mature, BSD-3; handles durations, ties, measures, clefs, chords, and MusicXML export |
 | MIDI writing | `mido` | core | Tiny, pure-Python (MIT); exact-time performance MIDI without quantization |
-| Tests | `pytest` | dev extra | Requested standard |
-| Lint/format | `ruff` | dev extra | One fast tool for lint and format |
-| Type checking | `mypy` | dev extra | Enforces the type-hint policy |
+| Tests | `pytest` | `dev` dependency group | Requested standard |
+| Lint/format | `ruff` | `dev` dependency group | One fast tool for lint and format |
+| Type checking | `mypy` | `dev` dependency group (deferred until M1 adds typed code) | Enforces the type-hint policy |
 
 Build backend: `hatchling`. Environment tool: `uv` (already installed), though a plain `pip install -e .[dev,basic-pitch]` also works.
 `numpy` is not a direct core dependency until code needs it. It arrives transitively.
@@ -139,10 +139,12 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 
 ### Milestones and acceptance criteria
 
-**M0 — Project skeleton**
-- `pyproject.toml` (hatchling, src layout, extras `dev` and `basic-pitch`, console script `guitar-transcribe`),
-  `.python-version` = 3.11, `data/README.md`, empty `docs/` and `notebooks/` placeholders.
-- ✅ `uv sync --extra dev` succeeds without installing TensorFlow or Basic Pitch.
+**M0 — Project skeleton** — *done 2026-09-26*
+- `pyproject.toml` (hatchling, src layout, PEP 735 `dev` dependency group), `.python-version` = 3.11,
+  `data/README.md` (+ `raw/`, `processed/`), `docs/` and `notebooks/` placeholders, empty
+  `domain/`, `guitar/`, `audio/`, `notation/` subpackages. The `basic-pitch` extra moves to M3 and
+  the `guitar-transcribe` console script to M6, when they have code behind them.
+- ✅ `uv sync` succeeds without installing TensorFlow or Basic Pitch.
 - ✅ `python -c "import guitar_transcription"` works in that environment.
 - ✅ `pytest` runs (placeholder test passes). `ruff check` and `ruff format --check` are clean.
 
@@ -285,3 +287,10 @@ multi-voice notation.
 - 2026-09-26 — Python pinned to 3.11: Basic Pitch 0.4.0 supports ≤3.11 and music21 10.x requires ≥3.11.
 - 2026-09-26 — Basic Pitch is an optional extra and imported lazily in a single adapter module.
 - 2026-09-26 — Stage 1 tempo and time signature are user-supplied. Tempo estimation is deferred.
+- 2026-09-26 — Re-verified for M0: Basic Pitch is still 0.4.0 on PyPI and `main` still pins
+  `tensorflow<2.15.1` (TF 2.15.0 wheels: cp39–cp311 only). An upstream PR adding 3.12 (Jan 2026) is unmerged.
+- 2026-09-26 — Dev tools use a PEP 735 `[dependency-groups] dev` (installed by default by `uv sync`)
+  rather than an extra, so they're never part of the published package metadata. Runtime backends stay extras.
+- 2026-09-26 — `ruff format` is scoped to Python sources (`*.md` excluded) so ruff ≥0.16 doesn't rewrite
+  the hand-aligned code sketches in docs.
+- 2026-09-26 — Tests use pytest `--import-mode=importlib`, so `tests/` mirrors the package without `__init__.py` files.

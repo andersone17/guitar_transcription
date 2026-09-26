@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Virtual environments / local env files
+.venv/
+venv/
+env/
+.env
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Local datasets: keep only READMEs and the directory skeleton
+data/**
+!data/**/
+!data/README.md
+!data/**/.gitkeep
+
+# Generated outputs
+outputs/
+*.mid
+*.midi
+*.musicxml
+*.mxl
+*.pdf
+
+# Audio / video recordings
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.aif
+*.aiff
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+
+# Model weights / caches
+*.onnx
+*.tflite
+*.h5
+*.pb
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.mlmodel
+*.mlpackage/
+saved_model/
+.cache/
+
+# Tiny synthesized test fixtures are allowed (see AGENTS.md)
+!tests/fixtures/**
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

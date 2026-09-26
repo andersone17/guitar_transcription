@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guitar-transcription"
+version = "0.1.0"
+description = "Multimodal automatic guitar transcription: audio (and later video) to notation and tablature."
+readme = "README.md"
+# Upper bound: Basic Pitch 0.4.0 pins tensorflow<2.15.1, whose wheels stop at Python 3.11.
+# Lower bound: music21 10.x requires Python >= 3.11. See PLAN.md "Decision log".
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guitar_transcription"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# importlib mode lets tests/ mirror the package layout without __init__.py files or name clashes.
+addopts = ["-ra", "--strict-markers", "--import-mode=importlib"]
+xfail_strict = true
+markers = [
+    "integration: runs a real model backend; skipped when the backend extra is not installed",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.format]
+# Keep hand-aligned code sketches in PLAN.md/README.md untouched; only format Python sources.
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

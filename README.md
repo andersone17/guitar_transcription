@@ -3,8 +3,7 @@
 A research/engineering project toward **multimodal automatic guitar transcription**: turning a recording
 of a guitarist, both audio and video, into standard notation and tablature that shows *what was actually played*.
 
-> **Current status: Stage 1 (audio-only) has not started yet.** The repository holds architecture and
-> planning documents only. See [PLAN.md](PLAN.md).
+> **Current status: Stage 1 (audio-only), milestone M0 (project skeleton) done.** No transcription code yet. See [PLAN.md](PLAN.md).
 
 ## Motivation
 
@@ -114,5 +113,12 @@ Details, acceptance criteria, and open research questions are in [PLAN.md](PLAN.
 
 ## Development
 
-Setup instructions will be added once Stage 1 milestone M0 (project skeleton) lands.
-Planned: Python 3.11, `pyproject.toml`, `src/` layout, `pytest`.
+Requires [uv](https://docs.astral.sh/uv/). Python is pinned to **3.11** (see PLAN.md, "Decision log").
+
+```bash
+uv python install 3.11      # once; uv sync will also fetch it automatically
+uv sync                     # creates .venv with the package (editable) + dev tools
+uv run pytest               # tests
+uv run ruff check           # lint
+uv run ruff format --check  # formatting
+```
