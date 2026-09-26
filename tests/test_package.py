@@ -4,7 +4,7 @@ import importlib
 
 import pytest
 
-SUBPACKAGES = ["domain", "guitar", "audio", "notation"]
+SUBPACKAGES = ["domain", "guitar", "audio", "rhythm", "notation"]
 
 
 def test_package_imports() -> None:

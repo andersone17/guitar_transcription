@@ -53,7 +53,9 @@ src/guitar_transcription/
         backends/
             basic_pitch.py   BasicPitchTranscriber (sole importer of basic_pitch; lazy import)
     rhythm/          # performance time -> musical time (pure Python, no music21)
-        quantize.py      raw events + known tempo/meter -> events placed on a beat/measure grid (M5)
+        values.py        NoteValue, RhythmicDuration, TimeSignature (measure length, locate)
+        quantized.py     QuantizedEvent (source event + onset/duration in quarters), Rest, QuantizedPerformance
+        quantize.py      quantize(events, quarter_note_bpm, time_signature, grid)
     notation/        # rendering views; no rhythm inference
         midi.py          performance MIDI export from raw seconds (no quantization)
         musicxml.py      quantized rhythm output -> MusicXML via music21 (M6)
@@ -150,9 +152,33 @@ Rhythm capability levels (each level keeps the same output types, so notation do
 3. **Automatic meter / downbeat estimation.**
 4. **Tempo and meter changes**, tuplet detection beyond a fixed grid, swing, and rubato.
 
-The output types (e.g. a quantized event and whatever represents tempo/meter) are **not designed yet**.
-They're created in M5, shaped by what `quantize` and the MusicXML writer actually need, and they live in
-`rhythm/` (not `domain/`) because they are an interpretation of the performance, not the performance itself.
+**Triplets (deferred, agreed 2026-09-26).** Today the grid only has straight subdivisions, so triplets are
+silently snapped to the nearest sixteenth and come out as the wrong rhythm (an eighth triplet becomes
+sixteenth–eighth–sixteenth, and sextuplets collide into fake chords). The model already supports them
+(exact `Fraction` thirds; `rhythmic_duration` returns `None` for ⅓), and music21 renders ⅓ as a triplet.
+Planned steps:
+(1) user-chosen triplet grids (⅓, ⅙) plus a CLI `--grid` option;
+(2) per-beat automatic duple-vs-triplet choice with a penalty against spurious triplets, tuned on
+Stage 2 data;
+(3) explicit tuplet groups in the rhythm output if music21's automatic bracketing is not enough.
+Swing (straight eighths written with a swing marking) is a separate decision on top of (2).
+Workaround until then: all-triplet music can use 12/8 with an eighth grid and `quarter_note_bpm` = 1.5 × the dotted-quarter pulse.
+
+The output types live in `rhythm/` (not `domain/`) because they are an interpretation of the
+performance, not the performance itself. As of M5 they are deliberately small:
+- `QuantizedEvent(source, onset_quarters, duration_quarters)`. `source` is the untouched `PerformanceEvent`;
+  pitch, offset, and the single-symbol name of the duration (`rhythmic_duration`, e.g. dotted eighth,
+  or `None` if it needs a tie) are derived.
+- `QuantizedPerformance(events, quarter_note_bpm, time_signature, grid)`, with `rests()`, `end_quarters`,
+  and `measure_count`.
+- Measure number and position within the measure are *not stored*. `TimeSignature.locate(quarters)`
+  derives them, so they can't disagree with the onset.
+- There is no TempoMap/MeterMap. One tempo and one meter are fields; levels 2–4 will replace those
+  fields, not the event type.
+
+**How time zero maps to the grid (level 1):** second 0 of the recording is the downbeat of measure 1.
+There's no pickup and no lead-in offset, so silence before the first note is a leading rest.
+`quarters = seconds × quarter_note_bpm / 60`.
 
 ## 3. Stage 1 plan: audio file → notation
 
@@ -266,8 +292,8 @@ upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real in
 - ✅ Round-trip test: reading the file back with `mido` recovers pitches exactly and times within 1 tick.
 - ✅ Overlapping notes of the same pitch are handled without stuck notes.
 
-**M5 — Rhythm quantization with known tempo and meter** (`rhythm/`, rhythm level 1)
-- `quantize(performance, tempo_bpm, time_signature, grid)` is pure: raw seconds → exact beat positions
+**M5 — Rhythm quantization with known tempo and meter** (`rhythm/`, rhythm level 1) — *done 2026-09-26*
+- `quantize(events, quarter_note_bpm, time_signature, grid)` is pure: raw seconds → exact beat positions
   snapped to a grid (default 16th notes), with a minimum duration of one grid step. Tempo and meter are
   user-supplied in Stage 1. The quantized output types are defined here, and each quantized event
   references its source `PerformanceEvent`.
@@ -450,3 +476,13 @@ Also later: chord-symbol inference, multi-voice notation.
 - 2026-09-26 — The Basic Pitch adapter silences known-irrelevant backend chatter (TF C++ logs via
   `TF_CPP_MIN_LOG_LEVEL` default 3, optional-runtime warnings, `pkg_resources` and decoder-fallback
   warnings), so CLI stderr shows only our progress and errors. Real failures still raise.
+- 2026-09-26 — Rhythm tempo is **quarter notes per minute** (`quarter_note_bpm`) for every meter, as in
+  MIDI. "Beat" is ambiguous in 6/8 (eighth or dotted quarter) and 2/2 (half), so the parameter name says
+  the unit. Callers (CLI) convert from other conventions.
+- 2026-09-26 — Quantization snaps onset and offset independently to the nearest grid line (half rounds
+  later) with a minimum of one grid step. Durations are grid multiples, not forced into single note
+  symbols. Rests are the gaps where no note sounds, so a legato gap under half a step disappears.
+  Overlapping notes are kept, because voicing them is a notation decision. The grid must divide the
+  measure evenly (validated).
+- 2026-09-26 — `rhythm` accepts any iterable of `PerformanceEvent`s, not a `Performance`, because
+  quantization needs no `GuitarConfig`. Notation receives the config separately.

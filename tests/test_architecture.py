@@ -16,6 +16,7 @@ ALLOWED = {
     "domain": {"domain"},
     "guitar": {"domain", "guitar"},
     "audio": {"domain", "guitar", "audio"},
+    "rhythm": {"domain", "rhythm"},
 }
 
 # The only files allowed to import a given third-party package (backend adapters).
