@@ -25,6 +25,11 @@ basic-pitch = [
     # basic-pitch pins resampy<0.4.3, which imports pkg_resources; setuptools 82 removed it.
     "setuptools<82",
 ]
+# Automatic tempo estimation; imported only by rhythm/backends/librosa_tempo.py.
+# <1.0: librosa 1.x needs Python >= 3.12 and numpy >= 2, incompatible with the Basic Pitch stack.
+tempo = [
+    "librosa>=0.10,<1.0",
+]
 
 [dependency-groups]
 dev = [

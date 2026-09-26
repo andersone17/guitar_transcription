@@ -24,6 +24,7 @@ ALLOWED = {
 THIRD_PARTY_OWNERS = {
     "basic_pitch": {"audio/backends/basic_pitch.py"},
     "music21": {"notation/musicxml.py"},
+    "librosa": {"rhythm/backends/librosa_tempo.py"},
 }
 
 
@@ -121,11 +122,12 @@ def test_guard_classifies_imports(module: str, allowed: bool) -> None:
     assert is_allowed(module, {"domain"}) is allowed
 
 
-def test_cli_imports_music21_only_when_writing_notation() -> None:
-    # music21 takes ~1 s to import; plain transcription and --help shouldn't pay for it.
+def test_cli_imports_heavy_libraries_only_when_needed() -> None:
+    # music21 (~1 s) and librosa load only for --musicxml / --auto-tempo, not for --help.
     code = (
         "import sys, guitar_transcription.cli, guitar_transcription.notation; "
-        "assert 'music21' not in sys.modules"
+        "loaded = [m for m in ('music21', 'librosa', 'numpy') if m in sys.modules]; "
+        "assert not loaded, loaded"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
 

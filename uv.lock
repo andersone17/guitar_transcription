@@ -393,6 +393,9 @@ basic-pitch = [
     { name = "basic-pitch" },
     { name = "setuptools" },
 ]
+tempo = [
+    { name = "librosa" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -403,10 +406,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "basic-pitch", marker = "extra == 'basic-pitch'", specifier = "==0.4.0" },
+    { name = "librosa", marker = "extra == 'tempo'", specifier = ">=0.10,<1.0" },
     { name = "music21", specifier = ">=10.5,<11" },
     { name = "setuptools", marker = "extra == 'basic-pitch'", specifier = "<82" },
 ]
-provides-extras = ["basic-pitch"]
+provides-extras = ["basic-pitch", "tempo"]
 
 [package.metadata.requires-dev]
 dev = [

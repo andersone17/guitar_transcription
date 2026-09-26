@@ -57,6 +57,9 @@ src/guitar_transcription/
         quantized.py     QuantizedEvent (source event + onset/duration in quarters), Rest, QuantizedPerformance
         quantize.py      quantize(events, quarter_note_bpm, time_signature, grid), check_grid
         voices.py        to_single_voice / is_single_voice (Stage 1 notation simplification)
+        tempo.py         TempoEstimator Protocol, TempoEstimate, tempo_from_beat_times, resolve_tempo
+        backends/
+            librosa_tempo.py LibrosaTempoEstimator (sole importer of librosa; lazy import)
     notation/        # rendering views; no rhythm inference
         midi.py          performance MIDI export from raw seconds (no quantization; not built yet)
         musicxml.py      write_musicxml(QuantizedPerformance) via music21 (sole music21 importer)
@@ -149,7 +152,9 @@ Rules:
 
 Rhythm capability levels (each level keeps the same output types, so notation doesn't change):
 1. **Known tempo + known meter** (user-supplied), a constant grid, and quantization. *Stage 1, M5.*
-2. **Automatic tempo / beat tracking** (possibly a varying beat grid).
+2. **Automatic tempo / beat tracking** (possibly a varying beat grid). *Started 2026-09-26:* one global
+   tempo from librosa beat tracking (`--auto-tempo`). Beat times are kept in `TempoEstimate` but not
+   yet used to align the grid (no downbeat/phase), and there's no varying tempo.
 3. **Automatic meter / downbeat estimation.**
 4. **Tempo and meter changes**, tuplet detection beyond a fixed grid, swing, and rubato.
 
@@ -196,6 +201,7 @@ information hooks for later tablature work, without choosing fingerings.
 | MIDI writing | `mido` | core | Tiny, pure-Python (MIT); exact-time performance MIDI without quantization |
 | Tests | `pytest` | `dev` dependency group | Requested standard |
 | Lint/format | `ruff` | `dev` dependency group | One fast tool for lint and format |
+| Tempo estimation | `librosa>=0.10,<1.0` | optional extra `tempo` (**installed**; also comes with `basic-pitch`) | Beat tracking for `--auto-tempo`; ISC; no new weight |
 | Type checking | `mypy` | `dev` dependency group (deferred until M1 adds typed code) | Enforces the type-hint policy |
 
 Build backend: `hatchling`. Environment tool: `uv` (already installed), though a plain `pip install -e .[dev,basic-pitch]` also works.
@@ -516,3 +522,25 @@ Also later: chord-symbol inference, multi-voice notation.
   shows eighths as sixteenth + rest, and an approximate tempo on an eighth grid merges neighbours into
   chords. Both are known risks (unreliable offsets, user-supplied tempo). A later rhythm improvement
   should derive notated durations from inter-onset intervals, not raw offsets.
+- 2026-09-26 — Tempo estimation backend: **librosa 0.11** beat tracker. Compared (Sep 2026):
+  - madmom: last release 2018, no wheels, and its models are CC BY-NC-SA (non-commercial).
+  - Essentia: AGPL-3.0, and the newest wheels are cp314 only.
+  - beat_this: MIT and state of the art, but needs PyTorch (GBs).
+  - BeatNet, tempocnn, aubio: stale, or GPL/AGPL, or pin TF 2.17.
+  - librosa is ISC and already installed with Basic Pitch.
+  - librosa ≥1.0 (Aug 2026) needs Python 3.12 and numpy 2, which the TF 2.15 stack can't use, hence `<1.0`.
+  - Revisit beat_this if accuracy on real guitar recordings is poor.
+- 2026-09-26 — The estimated tempo comes from a least-squares fit of the tracker's beat *times*
+  (numbered locally so missed beats don't shift the count), not from librosa's own tempo value. That
+  value is quantized to tempogram bins (117.45 for a true 120), and a 2% error drifts a beat every
+  ~50 beats.
+- 2026-09-26 — `TempoEstimator` lives in `rhythm/` (tempo is rhythm's decision), and its librosa backend
+  in `rhythm/backends/`. That makes this the one place `rhythm` reads audio, through a lazily imported
+  backend, so `rhythm` stays independent of `audio`. `TempoEstimate` has no confidence field, because
+  librosa provides no meaningful one.
+- 2026-09-26 — Explicit tempo wins: `resolve_tempo` never calls the estimator when a BPM is given, and
+  the CLI makes `--tempo`/`--auto-tempo` mutually exclusive. The detected pulse is treated as a quarter
+  note, with a warning for non-/4 meters. Estimates are rounded to 0.01 BPM.
+- 2026-09-26 — Metrical-level ambiguity (half/double time) is surfaced, not hidden. On a real
+  eighth-note scale, librosa reported ~201 BPM, and the CLI's suggested `--tempo 100.62` gave clean
+  notation (better than a hand guess of 100, which merged two notes into a chord).

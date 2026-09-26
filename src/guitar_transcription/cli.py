@@ -24,7 +24,17 @@ from guitar_transcription.audio.backends.basic_pitch import (
 from guitar_transcription.audio.transcriber import check_audio_path
 from guitar_transcription.domain import PerformanceEvent
 from guitar_transcription.domain.serialization import events_to_dict
-from guitar_transcription.rhythm import NoteValue, TimeSignature, quantize, to_single_voice
+from guitar_transcription.rhythm import (
+    NoteValue,
+    TempoEstimate,
+    TempoEstimationError,
+    TempoEstimator,
+    TimeSignature,
+    quantize,
+    resolve_tempo,
+    to_single_voice,
+)
+from guitar_transcription.rhythm.backends.librosa_tempo import LibrosaTempoEstimator
 from guitar_transcription.rhythm.quantize import check_grid
 
 EXIT_OK = 0
@@ -37,18 +47,20 @@ TIMING_NOTE = (
 )
 
 TranscriberFactory = Callable[[], AudioTranscriber]
+TempoEstimatorFactory = Callable[[], TempoEstimator]
 
 
 def main(
     argv: Sequence[str] | None = None,
     *,
     make_transcriber: TranscriberFactory = BasicPitchTranscriber,
+    make_tempo_estimator: TempoEstimatorFactory = LibrosaTempoEstimator,
 ) -> int:
-    """Run the CLI and return an exit code. ``make_transcriber`` lets tests supply a fake."""
+    """Run the CLI and return an exit code. The factories let tests supply fakes."""
     parser = build_parser()
     args = parser.parse_args(argv)
     _check_notation_options(parser, args)
-    return _transcribe(args, make_transcriber)
+    return _transcribe(args, make_transcriber, make_tempo_estimator)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,8 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notation = transcribe.add_argument_group(
         "notation",
-        "Quantize the events and write standard notation. Tempo and meter are not inferred yet, "
-        "so --musicxml requires --tempo and --time-signature. Measure 1 starts at 0 s.",
+        "Quantize the events and write standard notation. --musicxml requires --time-signature "
+        "(meter is not inferred) and either --tempo or --auto-tempo. Measure 1 starts at 0 s.",
     )
     notation.add_argument(
         "--musicxml",
@@ -87,11 +99,20 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="write quantized notation to PATH as MusicXML (open it in e.g. MuseScore)",
     )
-    notation.add_argument(
+    tempo_source = notation.add_mutually_exclusive_group()
+    tempo_source.add_argument(
         "--tempo",
         type=_positive_float,
         metavar="BPM",
         help="tempo in quarter notes per minute, in any meter (e.g. 120)",
+    )
+    tempo_source.add_argument(
+        "--auto-tempo",
+        action="store_true",
+        help=(
+            "estimate the tempo from the audio (beat tracking); the detected pulse is treated as a "
+            "quarter note. It may come out at half or double the intended tempo."
+        ),
     )
     notation.add_argument(
         "--time-signature",
@@ -139,6 +160,7 @@ def _check_notation_options(parser: argparse.ArgumentParser, args: argparse.Name
     """Usage errors (exit 2) before any slow work. Nothing musical is defaulted or guessed."""
     notation_only = {
         "--tempo": args.tempo,
+        "--auto-tempo": args.auto_tempo or None,
         "--time-signature": args.time_signature,
         "--grid": args.grid,
     }
@@ -147,18 +169,21 @@ def _check_notation_options(parser: argparse.ArgumentParser, args: argparse.Name
         if given:
             parser.error(f"{', '.join(given)} only apply to notation output; add --musicxml PATH")
         return
-    missing = [flag for flag in ("--tempo", "--time-signature") if notation_only[flag] is None]
-    if missing:
-        parser.error(
-            f"--musicxml requires {' and '.join(missing)} (tempo and meter are not inferred yet)"
-        )
+    if args.time_signature is None:
+        parser.error("--musicxml requires --time-signature (meter is not inferred yet)")
+    if args.tempo is None and not args.auto_tempo:
+        parser.error("--musicxml requires --tempo BPM or --auto-tempo")
     try:
         check_grid(args.time_signature, _grid(args))
     except ValueError as error:
         parser.error(str(error))
 
 
-def _transcribe(args: argparse.Namespace, make_transcriber: TranscriberFactory) -> int:
+def _transcribe(
+    args: argparse.Namespace,
+    make_transcriber: TranscriberFactory,
+    make_tempo_estimator: TempoEstimatorFactory,
+) -> int:
     # Validate before loading the model, which takes seconds.
     try:
         path = check_audio_path(args.audio, SUPPORTED_SUFFIXES)
@@ -186,19 +211,34 @@ def _transcribe(args: argparse.Namespace, make_transcriber: TranscriberFactory) 
         print(f"Wrote {len(events)} events to {json_path}", file=sys.stderr)
 
     if args.musicxml is not None:
-        return _write_notation(events, args, title=path.stem)
+        return _write_notation(events, args, path, make_tempo_estimator)
     return EXIT_OK
 
 
 def _write_notation(
-    events: Sequence[PerformanceEvent], args: argparse.Namespace, title: str
+    events: Sequence[PerformanceEvent],
+    args: argparse.Namespace,
+    audio_path: Path,
+    make_tempo_estimator: TempoEstimatorFactory,
 ) -> int:
     # Imported here: music21 takes ~1 s to import and is only needed for notation output.
     from guitar_transcription.notation.musicxml import write_musicxml
 
+    try:
+        bpm, estimate = resolve_tempo(
+            audio_path,
+            explicit_bpm=args.tempo,  # an explicit tempo always wins; the estimator isn't built
+            estimator=make_tempo_estimator() if args.tempo is None else None,
+        )
+    except TempoEstimationError as error:
+        return _fail(error, EXIT_FAILURE)
+    if estimate is not None:
+        bpm = round(bpm, 2)  # beyond 0.01 BPM is noise; keeps the tempo mark readable
+        _report_estimate(estimate, bpm, args.time_signature)
+
     quantized = quantize(
         events,
-        quarter_note_bpm=args.tempo,
+        quarter_note_bpm=bpm,
         time_signature=args.time_signature,
         grid=_grid(args),
     )
@@ -212,13 +252,13 @@ def _write_notation(
     dropped = len(quantized.events) - len(voiced.events)
     try:
         args.musicxml.parent.mkdir(parents=True, exist_ok=True)
-        write_musicxml(voiced, args.musicxml, title=title)
+        write_musicxml(voiced, args.musicxml, title=audio_path.stem)
     except OSError as error:
         return _fail(error, EXIT_FAILURE)
 
     print(
         f"Wrote MusicXML to {args.musicxml}: {max(voiced.measure_count, 1)} measure(s) of "
-        f"{voiced.time_signature} at quarter = {args.tempo:g}, {_grid(args).name.lower()} grid",
+        f"{voiced.time_signature} at quarter = {bpm:g}, {_grid(args).name.lower()} grid",
         file=sys.stderr,
     )
     if dropped or shortened:
@@ -229,6 +269,26 @@ def _write_notation(
             file=sys.stderr,
         )
     return EXIT_OK
+
+
+def _report_estimate(estimate: TempoEstimate, bpm: float, time_signature: TimeSignature) -> None:
+    print(
+        f"Estimated tempo: {bpm:g} BPM from {len(estimate.beat_times_seconds)} detected beats, "
+        f"used as quarter = {bpm:g}.",
+        file=sys.stderr,
+    )
+    print(
+        "  Beat trackers can lock onto half or double the intended pulse. If the notation looks "
+        f"twice too fast or slow, rerun with --tempo {estimate.half_time_bpm:.2f} or "
+        f"--tempo {estimate.double_time_bpm:.2f}.",
+        file=sys.stderr,
+    )
+    if time_signature.denominator != 4:
+        print(
+            f"  In {time_signature} the pulse is often not a quarter note (e.g. a dotted quarter "
+            "in 6/8); pass --tempo in quarter notes per minute if the result looks wrong.",
+            file=sys.stderr,
+        )
 
 
 def _grid(args: argparse.Namespace) -> NoteValue:

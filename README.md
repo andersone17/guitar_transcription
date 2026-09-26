@@ -4,8 +4,9 @@ A research/engineering project toward **multimodal automatic guitar transcriptio
 of a guitarist, both audio and video, into standard notation and tablature that shows *what was actually played*.
 
 > **Current status: Stage 1 (audio-only).** Audio → raw note events → quantized standard notation
-> (MusicXML) works from the command line, with tempo and meter supplied by you (see [Usage](#usage)).
-> Tablature, performance MIDI, and automatic tempo/meter are not done yet. See [PLAN.md](PLAN.md).
+> (MusicXML) works from the command line. The tempo is given by you or estimated from the audio,
+> and the meter is given by you (see [Usage](#usage)). Tablature, performance MIDI, and meter
+> estimation are not done yet. See [PLAN.md](PLAN.md).
 
 ## Motivation
 
@@ -116,8 +117,9 @@ Stage 1 includes:
 - export to performance MIDI (raw timing) and to quantized MusicXML that opens in MuseScore
 - a minimal command-line entry point
 
-Stage 1 does **not** include computer vision, fingering selection, technique detection, automatic
-tempo/meter estimation, live capture, or any UI.
+Stage 1 does **not** include computer vision, fingering selection, technique detection, meter or
+downbeat estimation, tempo changes, live capture, or any UI. (A basic, optional global tempo
+estimate, `--auto-tempo`, was added early.)
 
 ## Roadmap (high level)
 
@@ -145,12 +147,13 @@ if needed.
 ```bash
 git clone <this repository> guitar_transcription
 cd guitar_transcription
-uv sync --extra basic-pitch    # package + dev tools + Basic Pitch backend (TensorFlow 2.15, ~2 GB)
+uv sync --extra basic-pitch --extra tempo   # + Basic Pitch (TensorFlow 2.15, ~2 GB) + tempo estimation
 ```
 
 Without `--extra basic-pitch` everything installs and the tests run, but `transcribe` will exit with
-an error that tells you how to install the backend. Note that a later plain `uv sync` *removes* the
-extra, so keep passing `--extra basic-pitch`.
+an error that tells you how to install the backend. `--extra tempo` (librosa, which Basic Pitch
+already pulls in) is only needed for `--auto-tempo`. Note that a later plain `uv sync` *removes*
+extras, so keep passing them.
 
 ## Usage
 
@@ -208,11 +211,16 @@ with `null` for unknowns:
 ### Standard notation (MusicXML)
 
 Add `--musicxml` to also quantize the notes and write standard notation. Open the file in
-MuseScore, Finale, Dorico, or similar. Tempo and meter are **not inferred yet**, so both are required:
+MuseScore, Finale, Dorico, or similar. The time signature is required (meter is not inferred yet).
+The tempo is either given (`--tempo`) or estimated from the audio (`--auto-tempo`):
 
 ```bash
 uv run guitar-transcribe transcribe path/to/audio.wav \
     --tempo 120 --time-signature 4/4 \
+    --musicxml outputs/audio.musicxml
+
+uv run guitar-transcribe transcribe path/to/audio.wav \
+    --auto-tempo --time-signature 4/4 \
     --musicxml outputs/audio.musicxml
 ```
 
@@ -220,6 +228,7 @@ uv run guitar-transcribe transcribe path/to/audio.wav \
 |---|---|
 | `--musicxml PATH` | Write MusicXML (parent folders are created). |
 | `--tempo BPM` | **Quarter notes** per minute, in every meter. In 6/8 with a dotted-quarter pulse of 80, pass `--tempo 120`. |
+| `--auto-tempo` | Estimate the tempo by beat tracking (librosa) instead. The detected pulse is used as the quarter note. It can't be combined with `--tempo`; an explicit tempo always takes precedence. |
 | `--time-signature N/D` | e.g. `4/4`, `3/4`, `6/8`, `2/2`. |
 | `--grid VALUE` | Finest subdivision to snap to: `whole`, `half`, `quarter`, `eighth`, or `sixteenth` (default). |
 
@@ -235,6 +244,17 @@ How it works:
 Choosing a grid: `sixteenth` keeps the most detail but shows every early note release as a short note
 plus a rest. `eighth` reads more cleanly for simple lines, but notes closer together than an eighth
 merge into chords. A tempo that's slightly off makes both worse, so get it as close as you can.
+
+About `--auto-tempo`:
+- It measures the tempo precisely (within ~1% on test click tracks at 60–160 BPM). It is often better
+  than a tapped or guessed tempo.
+- **It can pick the wrong metrical level:** half or double the tempo you'd write. A scale in steady
+  eighth notes at ♩ = 100 is usually detected as 200, because every note gets its own beat. The CLI
+  prints both alternatives. If the notation looks twice too fast or slow, rerun with the suggested
+  `--tempo`.
+- It assumes a steady tempo and doesn't find the downbeat. Measure 1 still starts at 0 s.
+- In meters like 6/8 or 2/2 the detected pulse often isn't a quarter note. Prefer `--tempo` there.
+- The first estimate in a session takes a few extra seconds while librosa compiles its code.
 
 Keep recordings in `data/raw/` and outputs in `outputs/`. Both are git-ignored.
 

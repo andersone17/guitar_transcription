@@ -20,6 +20,7 @@ from guitar_transcription.cli import (
 )
 from guitar_transcription.domain import PerformanceEvent
 from guitar_transcription.domain.serialization import events_from_dict
+from guitar_transcription.rhythm import TempoEstimate, TempoEstimationError
 
 EVENTS = [
     PerformanceEvent(onset_seconds=0.4992, offset_seconds=0.9752, pitch_midi=55, velocity=0.856),
@@ -372,9 +373,23 @@ def test_overlaps_are_reported_when_shortened(
 @pytest.mark.parametrize(
     ("extra", "message"),
     [
-        (["--musicxml", "o.musicxml"], "requires --tempo and --time-signature"),
+        (["--musicxml", "o.musicxml"], "requires --time-signature"),
         (["--musicxml", "o.musicxml", "--tempo", "120"], "requires --time-signature"),
-        (["--musicxml", "o.musicxml", "--time-signature", "4/4"], "requires --tempo"),
+        (["--musicxml", "o.musicxml", "--auto-tempo"], "requires --time-signature"),
+        (["--musicxml", "o.musicxml", "--time-signature", "4/4"], "--tempo BPM or --auto-tempo"),
+        (
+            [
+                "--musicxml",
+                "o.musicxml",
+                "--time-signature",
+                "4/4",
+                "--tempo",
+                "90",
+                "--auto-tempo",
+            ],
+            "not allowed with",
+        ),
+        (["--auto-tempo"], "--auto-tempo only apply to notation output"),
         (["--tempo", "120"], "--tempo only apply to notation output"),
         (["--time-signature", "3/4", "--grid", "eighth"], "add --musicxml"),
         (["--musicxml", "o.musicxml", "--tempo", "0", "--time-signature", "4/4"], "positive"),
@@ -423,3 +438,108 @@ def test_notation_usage_errors_exit_2_before_transcribing(
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
     assert transcriber.calls == []
+
+
+# --- automatic tempo (--auto-tempo) ----------------------------------------------------------
+
+
+class FakeTempoEstimator:
+    def __init__(self, bpm: float = 99.37, error: Exception | None = None) -> None:
+        self.bpm = bpm
+        self.error = error
+        self.calls: list[Path] = []
+
+    def estimate(self, audio_path: object) -> TempoEstimate:
+        self.calls.append(Path(str(audio_path)))
+        if self.error:
+            raise self.error
+        return TempoEstimate(self.bpm, tuple(0.2 + i * 60 / self.bpm for i in range(8)))
+
+
+def run_with_tempo(
+    argv: list[str], estimator: FakeTempoEstimator, transcriber: FakeTranscriber | None = None
+) -> int:
+    return main(
+        argv,
+        make_transcriber=lambda: transcriber or FakeTranscriber(NOTATION_EVENTS),
+        make_tempo_estimator=lambda: estimator,
+    )
+
+
+def test_auto_tempo_estimates_and_uses_the_tempo(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from music21 import converter, tempo
+
+    out_path = tmp_path / "n.musicxml"
+    estimator = FakeTempoEstimator(99.3712)
+    argv = ["transcribe", str(audio_file), "--auto-tempo", "--time-signature", "4/4"]
+
+    assert run_with_tempo([*argv, "--musicxml", str(out_path)], estimator) == EXIT_OK
+
+    assert estimator.calls == [audio_file]
+    [mark] = converter.parse(out_path).recurse().getElementsByClass(tempo.MetronomeMark)
+    assert mark.number == 99.37  # rounded to 0.01 BPM
+    err = capsys.readouterr().err
+    assert "Estimated tempo: 99.37 BPM from 8 detected beats" in err
+    assert "--tempo 49.69" in err and "--tempo 198.74" in err  # half/double alternatives
+    assert "quarter = 99.37" in err
+
+
+def test_explicit_tempo_never_builds_an_estimator(audio_file: Path, tmp_path: Path) -> None:
+    built = []
+
+    def factory() -> FakeTempoEstimator:
+        built.append(True)
+        return FakeTempoEstimator()
+
+    argv = ["transcribe", str(audio_file), "--tempo", "120", "--time-signature", "4/4"]
+    code = main(
+        [*argv, "--musicxml", str(tmp_path / "n.musicxml")],
+        make_transcriber=lambda: FakeTranscriber(NOTATION_EVENTS),
+        make_tempo_estimator=factory,
+    )
+
+    assert code == EXIT_OK
+    assert built == []
+
+
+def test_auto_tempo_does_not_change_raw_timing(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    json_path = tmp_path / "e.json"
+    argv = ["transcribe", str(audio_file), "--json", str(json_path), "--auto-tempo"]
+
+    code = run_with_tempo(
+        [*argv, "--time-signature", "4/4", "--musicxml", str(tmp_path / "n.musicxml")],
+        FakeTempoEstimator(),
+    )
+
+    assert code == EXIT_OK
+    assert events_from_dict(json.loads(json_path.read_text())) == NOTATION_EVENTS
+    assert "1.020" in capsys.readouterr().out
+
+
+def test_auto_tempo_failure_exits_1(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    estimator = FakeTempoEstimator(error=TempoEstimationError("need at least 4 beats"))
+    argv = ["transcribe", str(audio_file), "--auto-tempo", "--time-signature", "4/4"]
+
+    code = run_with_tempo([*argv, "--musicxml", str(tmp_path / "n.musicxml")], estimator)
+
+    assert code == EXIT_FAILURE
+    assert "need at least 4 beats" in capsys.readouterr().err
+    assert not (tmp_path / "n.musicxml").exists()
+
+
+def test_auto_tempo_warns_about_pulse_in_non_quarter_meters(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["transcribe", str(audio_file), "--auto-tempo", "--time-signature", "6/8"]
+
+    assert (
+        run_with_tempo([*argv, "--musicxml", str(tmp_path / "n.musicxml")], FakeTempoEstimator())
+        == 0
+    )
+    assert "In 6/8 the pulse is often not a quarter note" in capsys.readouterr().err
