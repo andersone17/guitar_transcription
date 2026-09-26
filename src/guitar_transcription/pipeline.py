@@ -1,6 +1,7 @@
 """Stage 1 pipeline: the one place that connects the stages.
 
-    audio file --AudioTranscriber--> PerformanceEvent[] (raw seconds)
+    audio file --AudioTranscriber (range from GuitarConfig)--> PerformanceEvent[] (raw seconds)
+        --Performance(events, GuitarConfig)--> events bound to (and checked against) the instrument
         --tempo (explicit, or TempoEstimator)--> quarter-note BPM
         --quantize + to_single_voice (known meter)--> QuantizedPerformance
         --write_musicxml--> MusicXML
@@ -13,12 +14,11 @@ events reference the very same objects.
 """
 
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from os import PathLike
 from pathlib import Path
 
-from guitar_transcription.domain import STANDARD_GUITAR, GuitarConfig, PerformanceEvent
+from guitar_transcription.domain import STANDARD_GUITAR, GuitarConfig, Performance
 from guitar_transcription.domain.pitch import pitch_name
 from guitar_transcription.domain.serialization import events_to_dict
 from guitar_transcription.guitar import pitch_range
@@ -34,7 +34,7 @@ from guitar_transcription.rhythm import (
 )
 
 DEFAULT_GUITAR = STANDARD_GUITAR
-"""Instrument assumed when none is given (Stage 1 has no tuning/capo options yet)."""
+"""Instrument assumed when the caller gives none: 6 strings, standard tuning, no capo, 22 frets."""
 
 ESTIMATED_TEMPO_DECIMALS = 2  # beyond 0.01 BPM is noise; keeps the tempo mark readable
 
@@ -96,13 +96,13 @@ def describe_range(low: int, high: int) -> str:
 
 
 def notate(
-    events: Sequence[PerformanceEvent],
+    performance: Performance,
     audio_path: str | PathLike[str],
     request: NotationRequest,
     *,
     tempo_estimator: TempoEstimator | None = None,
 ) -> NotationResult:
-    """Resolve the tempo, then quantize and reduce to one voice. ``events`` are not modified.
+    """Resolve the tempo, then quantize and reduce to one voice. Events are not modified.
 
     ``audio_path`` is only read by the tempo estimator, and only if no tempo was given.
     Raises ``TempoEstimationError`` if estimation fails, ``ValueError`` for an unusable grid/meter.
@@ -115,7 +115,7 @@ def notate(
     if estimate is not None:
         bpm = round(bpm, ESTIMATED_TEMPO_DECIMALS)
     quantized = quantize(
-        events,
+        performance.events,
         quarter_note_bpm=bpm,
         time_signature=request.time_signature,
         grid=request.grid,
@@ -124,13 +124,12 @@ def notate(
     return NotationResult(bpm, estimate, quantized, to_single_voice(quantized))
 
 
-def write_events_json(
-    events: Sequence[PerformanceEvent], path: str | PathLike[str], *, source: str
-) -> Path:
-    """Write raw events as ``performance-events`` JSON (creating parent folders)."""
+def write_events_json(performance: Performance, path: str | PathLike[str], *, source: str) -> Path:
+    """Write raw events and the guitar they were played on as ``performance-events`` JSON."""
+    document = events_to_dict(performance.events, source=source, guitar=performance.config)
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(events_to_dict(events, source=source), indent=2) + "\n")
+    output.write_text(json.dumps(document, indent=2) + "\n")
     return output
 
 

@@ -154,8 +154,9 @@ uv sync --extra basic-pitch --extra tempo      # ~2 GB (TensorFlow); first run i
 **2. Record** something that suits Stage 1:
 - **Solo guitar only:** no backing track, voice, drums, or metronome click bleeding in. Acoustic or
   clean electric; heavy distortion and effects hurt.
-- **Standard tuning, up to fret 22** (E2–D6). For drop tunings, 7-string, or 24-fret playing, add
-  `--full-range`.
+- **Tell it your guitar** if it isn't standard tuning, no capo, 22 frets: `--tuning drop-d` (or
+  notes from the lowest string up, e.g. `--tuning D2,A2,D3,G3,B3,E4`), `--capo 2`, `--max-fret 24`.
+  Notes the guitar can't play are not detected, which removes ghost notes from string harmonics.
 - **A single melody or simple chords, at a steady tempo.** Silence before you start is fine: the
   first detected note is taken as beat 1. If the piece starts with a pickup (upbeat), note the time
   of the first *downbeat* from the transcription table and pass it with `--downbeat SECONDS`.
@@ -222,7 +223,8 @@ Stage 1 is an audio-only baseline. Specifically, it:
   extra notes: a bend can appear as two pitches, a harmonic as a high note.
 - **Uses a general-purpose model.** Basic Pitch isn't guitar-specific. Expect missed notes in dense
   strums, occasional octave or ghost notes, and weaker results with distortion. Detection is limited
-  to a standard-tuned 22-fret guitar's range unless you pass `--full-range`.
+  to the range of the guitar you describe (default: standard tuning, 22 frets). A wrong `--tuning`
+  or `--capo` therefore silently drops real notes at the edges; `--full-range` turns the limit off.
 - **Isn't real-time.** It processes a finished recording file. Measured: about 6 s for a 30 s clip,
   including model start-up, tempo estimation and MusicXML, on an 8-core CPU. The first run after
   installing is slower while libraries compile.
@@ -275,8 +277,18 @@ RAW PERFORMANCE TIMING: seconds from the start of the recording, as played. Not 
   come from the rhythm stage.
 - `velocity` is Basic Pitch's normalized note amplitude (0–1), not a calibrated confidence.
 - String/fret are not inferred at this stage.
-- Detection is limited to a standard-tuned 22-fret guitar's range (E2–D6), which removes ghost notes
-  from string harmonics. Add `--full-range` for drop/extended tunings or 24-fret playing.
+- Detection is limited to the guitar's playable range, which removes ghost notes from string
+  harmonics. Describe your guitar with these options (they apply with or without `--musicxml`):
+
+  | Option | Meaning |
+  |---|---|
+  | `--tuning NOTES\|NAME` | Open strings from the **lowest string up**, with octaves: `E2,A2,D3,G3,B3,E4` (default), `B1,E2,A2,D3,G3,B3,E4` (7-string). Or a preset: `standard`, `drop-d`, `half-step-down`, `dadgad`, `open-g`, `open-d`. |
+  | `--capo FRET` | Capo position. The lowest detectable note rises accordingly. |
+  | `--max-fret N` | Highest fret (default 22). |
+  | `--full-range` | Ignore the guitar's range and detect everything the model can hear. |
+
+  Internally, strings are numbered as in tablature: string 1 is the highest-sounding string, and
+  frets are physical, counting through the capo.
 - Progress and errors go to stderr, and the table goes to stdout.
 - Exit codes: `0` success, `2` missing/unreadable input or bad arguments, `1` transcription failure
   (e.g. backend not installed).
@@ -291,6 +303,7 @@ with `null` for unknowns:
   "version": 1,
   "timing": "raw-performance-seconds",
   "source": "path/to/audio.wav",
+  "guitar": {"open_strings": [64, 59, 55, 50, 45, 40], "capo": 0, "max_fret": 22},
   "events": [
     {"onset_seconds": 0.4992, "offset_seconds": 0.9752, "pitch_midi": 55, "velocity": 0.8558,
      "string": null, "fret": null, "pick_direction": null, "audio_confidence": null,

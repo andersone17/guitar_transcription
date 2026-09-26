@@ -1,6 +1,6 @@
 import pytest
 
-from guitar_transcription.domain.pitch import pitch_name, validate_midi_pitch
+from guitar_transcription.domain.pitch import parse_pitch_name, pitch_name, validate_midi_pitch
 
 
 @pytest.mark.parametrize(
@@ -46,3 +46,49 @@ def test_non_int_pitch_is_rejected(value: object) -> None:
 def test_error_message_names_the_field() -> None:
     with pytest.raises(ValueError, match="open pitch of string 3"):
         validate_midi_pitch(200, what="open pitch of string 3")
+
+
+# --- parse_pitch_name ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "midi"),
+    [
+        ("E2", 40),
+        ("A2", 45),
+        ("E4", 64),
+        ("C4", 60),
+        ("F#2", 42),
+        ("Bb3", 58),
+        ("Eb2", 39),
+        ("db3", 49),
+        ("B1", 35),
+        ("C-1", 0),
+        ("G9", 127),
+        (" D2 ", 38),
+    ],
+)
+def test_parse_pitch_name(name: str, midi: int) -> None:
+    assert parse_pitch_name(name) == midi
+
+
+def test_enharmonic_spellings_are_the_same_pitch() -> None:
+    assert parse_pitch_name("C#3") == parse_pitch_name("Db3")
+    assert parse_pitch_name("B#3") == parse_pitch_name("C4")
+    assert parse_pitch_name("Cb4") == parse_pitch_name("B3")
+
+
+def test_round_trips_with_pitch_name_for_every_midi_note() -> None:
+    assert all(parse_pitch_name(pitch_name(m)) == m for m in range(128))
+
+
+@pytest.mark.parametrize("name", ["E", "H2", "E#", "E2.5", "", "EE2", "E 2", "2E"])
+def test_rejects_malformed_names(name: str) -> None:
+    with pytest.raises(ValueError, match="not a pitch name"):
+        parse_pitch_name(name)
+
+
+@pytest.mark.parametrize("name", ["Cb-1", "G#9", "C10"])
+def test_rejects_names_outside_midi(name: str) -> None:
+    with pytest.raises(ValueError, match="0..127"):
+        parse_pitch_name(name)

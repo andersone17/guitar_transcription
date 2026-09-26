@@ -4,11 +4,17 @@ Pitch is stored as a MIDI note number everywhere in the domain; names are derive
 stored name can never disagree with the number it describes.
 """
 
+import re
+
 MIDI_MIN = 0
 MIDI_MAX = 127
 
 # Sharps only: spelling (C# vs Db) depends on key context, which only notation knows about.
 _PITCH_CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
+_LETTER_SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+_ACCIDENTAL_SEMITONES = {"": 0, "#": 1, "b": -1}
+_NAME_PATTERN = re.compile(r"^([A-Ga-g])([#b]?)(-?\d+)$")
 
 
 def validate_midi_pitch(pitch: int, what: str = "pitch") -> None:
@@ -31,3 +37,20 @@ def pitch_name(pitch: int) -> str:
     validate_midi_pitch(pitch)
     octave, pitch_class = divmod(pitch, 12)
     return f"{_PITCH_CLASS_NAMES[pitch_class]}{octave - 1}"
+
+
+def parse_pitch_name(name: str) -> int:
+    """MIDI number of a scientific pitch name: "E2" -> 40, "F#2" -> 42, "Bb3" -> 58, "C-1" -> 0.
+
+    Letter (any case), optional ``#`` or ``b``, then the octave (middle C is C4). Enharmonic
+    spellings are accepted: "Db3" == "C#3", "B#3" == "C4", "Cb4" == "B3". Raises ``ValueError``
+    for anything else or a pitch outside MIDI 0..127.
+    """
+    match = _NAME_PATTERN.match(name.strip())
+    if match is None:
+        raise ValueError(f"not a pitch name like 'E2', 'F#3' or 'Bb3': {name!r}")
+    letter, accidental, octave = match.groups()
+    pitch = (int(octave) + 1) * 12 + _LETTER_SEMITONES[letter.upper()]
+    pitch += _ACCIDENTAL_SEMITONES[accidental]
+    validate_midi_pitch(pitch, what=f"pitch {name!r}")
+    return pitch

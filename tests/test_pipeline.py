@@ -15,7 +15,7 @@ import pytest
 from music21 import converter, stream, tempo
 
 from guitar_transcription.audio import AudioTranscriber
-from guitar_transcription.domain import PerformanceEvent
+from guitar_transcription.domain import STANDARD_GUITAR, Performance, PerformanceEvent
 from guitar_transcription.domain.serialization import events_from_dict
 from guitar_transcription.pipeline import (
     NotationRequest,
@@ -44,6 +44,10 @@ RAW = [
     PerformanceEvent(onset_seconds=3.002, offset_seconds=4.10, pitch_midi=64, velocity=0.6),
     PerformanceEvent(onset_seconds=3.497, offset_seconds=3.98, pitch_midi=66, velocity=0.6),
 ]
+
+
+def perf(events: list[PerformanceEvent]) -> Performance:
+    return Performance(events, STANDARD_GUITAR)
 
 
 class FakeTranscriber:
@@ -75,8 +79,11 @@ def run(
     transcriber: AudioTranscriber = FakeTranscriber(RAW)
     audio = tmp_path / "take.wav"
     events = transcriber.transcribe(audio)
-    json_path = write_events_json(events, tmp_path / "out" / "take.events.json", source=str(audio))
-    result = notate(events, audio, request, tempo_estimator=estimator)
+    performance = perf(events)
+    json_path = write_events_json(
+        performance, tmp_path / "out" / "take.events.json", source=str(audio)
+    )
+    result = notate(performance, audio, request, tempo_estimator=estimator)
     xml_path = write_notation(result, tmp_path / "out" / "take.musicxml", title="take")
     return events, json_path, xml_path
 
@@ -103,7 +110,7 @@ def test_raw_events_are_passed_through_not_copied_or_changed(tmp_path: Path) -> 
     before = copy.deepcopy(RAW)
     audio = tmp_path / "take.wav"
 
-    result = notate(RAW, audio, NotationRequest(FOUR_FOUR, tempo_bpm=120))
+    result = notate(perf(RAW), audio, NotationRequest(FOUR_FOUR, tempo_bpm=120))
 
     assert RAW == before
     # Every quantized event points at one of the transcriber's own objects.
@@ -112,7 +119,7 @@ def test_raw_events_are_passed_through_not_copied_or_changed(tmp_path: Path) -> 
 
 
 def test_rhythm_output_is_single_voice_and_counts_what_changed(tmp_path: Path) -> None:
-    result = notate(RAW, tmp_path / "take.wav", NotationRequest(FOUR_FOUR, tempo_bpm=120))
+    result = notate(perf(RAW), tmp_path / "take.wav", NotationRequest(FOUR_FOUR, tempo_bpm=120))
 
     assert not is_single_voice(result.quantized)  # E4 rings into F#4
     assert is_single_voice(result.voiced)
@@ -127,7 +134,7 @@ def test_explicit_tempo_wins_over_estimator(tmp_path: Path) -> None:
     estimator = FakeTempoEstimator(bpm=61.0)
 
     result = notate(
-        RAW, tmp_path / "t.wav", NotationRequest(FOUR_FOUR, 120), tempo_estimator=estimator
+        perf(RAW), tmp_path / "t.wav", NotationRequest(FOUR_FOUR, 120), tempo_estimator=estimator
     )
 
     assert estimator.calls == 0
@@ -139,7 +146,7 @@ def test_estimated_tempo_is_used_rounded_and_reported(tmp_path: Path) -> None:
 
     events, _, xml_path = run(tmp_path, NotationRequest(FOUR_FOUR), estimator)
     result = notate(
-        events, tmp_path / "take.wav", NotationRequest(FOUR_FOUR), tempo_estimator=estimator
+        perf(events), tmp_path / "take.wav", NotationRequest(FOUR_FOUR), tempo_estimator=estimator
     )
 
     assert result.tempo_bpm == 119.99
@@ -152,7 +159,7 @@ def test_estimated_tempo_is_used_rounded_and_reported(tmp_path: Path) -> None:
 
 def test_missing_tempo_and_estimator_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no tempo"):
-        notate(RAW, tmp_path / "t.wav", NotationRequest(FOUR_FOUR))
+        notate(perf(RAW), tmp_path / "t.wav", NotationRequest(FOUR_FOUR))
 
 
 def test_estimation_failure_propagates(tmp_path: Path) -> None:
@@ -161,13 +168,13 @@ def test_estimation_failure_propagates(tmp_path: Path) -> None:
             raise TempoEstimationError("need at least 4 beats")
 
     with pytest.raises(TempoEstimationError):
-        notate(RAW, tmp_path / "t.wav", NotationRequest(FOUR_FOUR), tempo_estimator=Failing())
+        notate(perf(RAW), tmp_path / "t.wav", NotationRequest(FOUR_FOUR), tempo_estimator=Failing())
 
 
 def test_meter_and_grid_are_applied(tmp_path: Path) -> None:
     request = NotationRequest(TimeSignature(3, 4), tempo_bpm=120, grid=NoteValue.EIGHTH)
 
-    result = notate(RAW, tmp_path / "t.wav", request)
+    result = notate(perf(RAW), tmp_path / "t.wav", request)
 
     assert (result.voiced.time_signature, result.voiced.grid) == (
         TimeSignature(3, 4),
@@ -177,7 +184,7 @@ def test_meter_and_grid_are_applied(tmp_path: Path) -> None:
 
 
 def test_no_notes_still_gives_valid_notation(tmp_path: Path) -> None:
-    result = notate([], tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=90))
+    result = notate(perf([]), tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=90))
     path = write_notation(result, tmp_path / "empty.musicxml", title="empty")
 
     assert len(converter.parse(path).parts[0].getElementsByClass(stream.Measure)) == 1
@@ -192,7 +199,9 @@ def test_strum_reaches_musicxml_as_one_chord(tmp_path: Path) -> None:
     ]
     melody = [PerformanceEvent(onset_seconds=0.5, offset_seconds=0.98, pitch_midi=64)]
 
-    result = notate(strum + melody, tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=120))
+    result = notate(
+        perf(strum + melody), tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=120)
+    )
     score = converter.parse(write_notation(result, tmp_path / "strum.musicxml", title="strum"))
 
     first, second = list(score.recurse().notes)[:2]
@@ -212,7 +221,7 @@ def test_downbeat_request_reaches_rhythm_and_notation(tmp_path: Path) -> None:
     ]
     request = NotationRequest(FOUR_FOUR, tempo_bpm=120, downbeat_seconds=2.0)
 
-    result = notate(events, tmp_path / "t.wav", request)
+    result = notate(perf(events), tmp_path / "t.wav", request)
     score = converter.parse(write_notation(result, tmp_path / "p.musicxml", title="p"))
 
     assert result.voiced.origin_seconds == 0.0  # measure 1 starts 2 s (one bar) before 2.0 s

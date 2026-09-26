@@ -47,7 +47,7 @@ src/guitar_transcription/
         evidence.py      AudioNoteEvidence (M3; later FrettingEvidence, PickingEvidence)
     guitar/          # instrument reasoning; pure Python
         positions.py     pitch_for_position, candidate_positions, pitch_range
-        tunings.py       parsing "E2,A2,..." strings, named tunings (M7, for the CLI)
+        tunings.py       parse_tuning ("E2,A2,..." low-to-high or a preset), describe_tuning
     audio/           # audio perception
         transcriber.py   AudioTranscriber Protocol, TranscriptionOptions
         backends/
@@ -409,15 +409,18 @@ upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real in
 **M7 — Pipeline and CLI** — *integration path done 2026-09-26; tuning options and performance MIDI open*
 - `pipeline.py` holds the Stage 1 wiring, and the CLI only parses arguments and reports. One command
   covers the whole path:
-  `guitar-transcribe transcribe AUDIO [--json PATH] [--full-range] [--musicxml PATH (--tempo BPM | --auto-tempo)
-  --time-signature N/D [--grid VALUE]]`. Exit codes: 0 ok, 2 bad input/usage, 1 processing failure.
+  `guitar-transcribe transcribe AUDIO [--json PATH] [--tuning T] [--capo N] [--max-fret N] [--full-range]
+  [--musicxml PATH (--tempo BPM | --auto-tempo) --time-signature N/D [--grid VALUE] [--downbeat S]]`. Exit codes: 0 ok, 2 bad input/usage, 1 processing failure.
   (This replaces the earlier idea of a separate pipeline subcommand with `--out DIR`: the per-output
   flags cover the same ground.)
-- Detection is limited to the instrument's range, `guitar.pitch_range(DEFAULT_GUITAR)` (E2–D6), passed to
-  the transcriber. `--full-range` disables this. It was found necessary by the end-to-end test, where
+- Detection is limited to the instrument's range, `guitar.pitch_range(config)` for the `GuitarConfig`
+  built from `--tuning/--capo/--max-fret` (default: standard, no capo, 22 frets = E2–D6), and passed
+  to the transcriber. `--full-range` disables this. It was found necessary by the end-to-end test, where
   Basic Pitch reported G6/E6 ghost notes from string harmonics.
-- *Still open:* `guitar/tunings.py` + `--tuning/--capo/--max-fret` (so the range follows the real
-  instrument), `--onset-threshold/--frame-threshold`, and performance MIDI (M4).
+- *Done 2026-09-26:* `guitar/tunings.py` + `--tuning/--capo/--max-fret`. Transcribed events become a
+  `Performance(events, config)` (validates any string/fret), which `notate` and `write_events_json`
+  take, and the JSON records the guitar.
+- *Still open:* `--onset-threshold/--frame-threshold`, and performance MIDI (M4).
 - ✅ Integration strategy in three tiers: fast unit tests; fast pipeline contract tests
   (`tests/test_pipeline.py`: real rhythm and notation chained through `pipeline.py`, model faked through
   our protocols, checking what crosses each boundary, including source-event identity); and opt-in
@@ -683,3 +686,11 @@ Also later: chord-symbol inference, multi-voice notation.
   - `origin_seconds` / `seconds_at()` give an exact musical → recording time map.
   - The downbeat is never inferred (see the meter findings). A stray noise before the music will
     become beat 1, and `--downbeat` is the fix.
+- 2026-09-26 — Done (review IMPORTANT 3): `GuitarConfig` now flows through the pipeline. The CLI builds
+  it from `--tuning` (written low-to-high like guitarists write it, reversed *by position* so
+  re-entrant tunings keep their string numbers; or a preset), `--capo` and `--max-fret`, and
+  validates it before any slow work (exit 2). The detection range follows it, which fixes drop/7-string
+  low notes being cut. Events are wrapped in `Performance(events, config)` right after transcription,
+  so string/fret added by future fusion are checked against the real instrument. `performance-events`
+  JSON gained an optional `guitar` object (still v1: loaders ignore it, and `guitar_from_dict` reads
+  it). Notation doesn't take the config yet; TAB will, for capo-relative frets.

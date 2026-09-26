@@ -3,6 +3,10 @@
 The document is self-describing so later stages (rhythm, evaluation) can load it and refuse files
 they don't understand. Every event field is written, including ``None`` for unknowns, so "not
 inferred" stays explicit. Derived values (pitch name, duration) are not stored.
+
+An optional ``guitar`` object records the instrument (``open_strings`` in string-1-first order,
+``capo``, ``max_fret``): once events carry string/fret, the numbers only mean something relative
+to the tuning and capo they were played with.
 """
 
 import dataclasses
@@ -10,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from guitar_transcription.domain.events import PerformanceEvent, PickDirection
+from guitar_transcription.domain.guitar_config import GuitarConfig
 
 FORMAT = "guitar-transcription/performance-events"
 VERSION = 1
@@ -21,16 +26,37 @@ _FIELD_NAMES = tuple(field.name for field in dataclasses.fields(PerformanceEvent
 
 
 def events_to_dict(
-    events: Iterable[PerformanceEvent], *, source: str | None = None
+    events: Iterable[PerformanceEvent],
+    *,
+    source: str | None = None,
+    guitar: GuitarConfig | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-ready document; ``source`` says where the events came from (e.g. a path)."""
-    return {
+    document: dict[str, Any] = {
         "format": FORMAT,
         "version": VERSION,
         "timing": TIMING,
         "source": source,
-        "events": [{name: getattr(event, name) for name in _FIELD_NAMES} for event in events],
     }
+    if guitar is not None:
+        document["guitar"] = {
+            "open_strings": list(guitar.open_strings),
+            "capo": guitar.capo,
+            "max_fret": guitar.max_fret,
+        }
+    document["events"] = [{name: getattr(event, name) for name in _FIELD_NAMES} for event in events]
+    return document
+
+
+def guitar_from_dict(document: Mapping[str, Any]) -> GuitarConfig | None:
+    """The document's ``guitar`` object as a validated ``GuitarConfig``, or ``None`` if absent."""
+    raw = document.get("guitar")
+    if raw is None:
+        return None
+    try:
+        return GuitarConfig(tuple(raw["open_strings"]), capo=raw["capo"], max_fret=raw["max_fret"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid guitar object: {error}") from error
 
 
 def events_from_dict(document: Mapping[str, Any]) -> list[PerformanceEvent]:

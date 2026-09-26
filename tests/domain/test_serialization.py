@@ -3,13 +3,19 @@ from typing import Any
 
 import pytest
 
-from guitar_transcription.domain import PerformanceEvent, PickDirection
+from guitar_transcription.domain import (
+    STANDARD_TUNING,
+    GuitarConfig,
+    PerformanceEvent,
+    PickDirection,
+)
 from guitar_transcription.domain.serialization import (
     FORMAT,
     TIMING,
     VERSION,
     events_from_dict,
     events_to_dict,
+    guitar_from_dict,
 )
 
 RAW = PerformanceEvent(
@@ -104,3 +110,36 @@ def test_rejects_invalid_events() -> None:
 
     with pytest.raises(ValueError, match="event 0"):
         events_from_dict(document)
+
+
+# --- guitar object ---------------------------------------------------------------------------
+
+
+def test_guitar_is_recorded_when_given() -> None:
+    capo_2 = GuitarConfig(STANDARD_TUNING, capo=2, max_fret=24)
+
+    document = json.loads(json.dumps(events_to_dict([RAW], guitar=capo_2)))
+
+    assert document["guitar"] == {"open_strings": list(STANDARD_TUNING), "capo": 2, "max_fret": 24}
+    assert guitar_from_dict(document) == capo_2
+    assert events_from_dict(document) == [RAW]  # events still load as before
+
+
+def test_guitar_is_absent_when_not_given() -> None:
+    document = events_to_dict([RAW])
+
+    assert "guitar" not in document
+    assert guitar_from_dict(document) is None
+
+
+@pytest.mark.parametrize(
+    "guitar",
+    [
+        {"open_strings": [64, 59], "capo": 30, "max_fret": 22},  # capo off the neck
+        {"open_strings": [], "capo": 0, "max_fret": 22},
+        {"capo": 0, "max_fret": 22},
+    ],
+)
+def test_invalid_guitar_object(guitar: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="invalid guitar"):
+        guitar_from_dict({**events_to_dict([RAW]), "guitar": guitar})

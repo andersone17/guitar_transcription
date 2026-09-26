@@ -677,3 +677,96 @@ def test_downbeat_usage_errors(
 
     assert exit_info.value.code == 2
     assert message in capsys.readouterr().err
+
+
+# --- guitar options (review IMPORTANT 3) -----------------------------------------------------
+
+
+def detection_range_for(audio_file: Path, *options: str) -> tuple[int, int] | None:
+    ranges: list[tuple[int, int] | None] = []
+
+    def factory(pitch_range: tuple[int, int] | None) -> FakeTranscriber:
+        ranges.append(pitch_range)
+        return FakeTranscriber()
+
+    assert main(["transcribe", str(audio_file), *options], make_transcriber=factory) == EXIT_OK
+    return ranges[0]
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ((), (40, 86)),  # standard, 22 frets: E2..D6
+        (("--tuning", "drop-d"), (38, 86)),  # low D is now detectable
+        (("--tuning", "D2,A2,D3,G3,B3,E4"), (38, 86)),
+        (("--tuning", "B1,E2,A2,D3,G3,B3,E4"), (35, 86)),  # 7-string
+        (("--capo", "2"), (42, 86)),  # open low E is impossible under a capo
+        (("--max-fret", "24"), (40, 88)),
+        (("--tuning", "open-g", "--capo", "5", "--max-fret", "20"), (43, 82)),
+        (("--tuning", "drop-d", "--full-range"), None),
+    ],
+)
+def test_detection_range_follows_the_guitar(
+    audio_file: Path, options: tuple[str, ...], expected: tuple[int, int] | None
+) -> None:
+    assert detection_range_for(audio_file, *options) == expected
+
+
+def test_guitar_is_reported(audio_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    detection_range_for(audio_file, "--tuning", "drop-d", "--capo", "3")
+
+    err = capsys.readouterr().err
+    assert "guitar: D2 A2 D3 G3 B3 E4, capo 3, 22 frets; notes F2-D6" in err
+
+
+def test_json_records_the_guitar(audio_file: Path, tmp_path: Path) -> None:
+    from guitar_transcription.domain.serialization import guitar_from_dict
+
+    out = tmp_path / "e.json"
+    argv = ["transcribe", str(audio_file), "--json", str(out), "--tuning", "drop-d", "--capo", "2"]
+
+    assert run(argv, FakeTranscriber()) == EXIT_OK
+    guitar = guitar_from_dict(json.loads(out.read_text()))
+    assert guitar is not None
+    assert (guitar.open_strings[5], guitar.capo, guitar.max_fret) == (38, 2, 22)
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (["--tuning", "EADGBE"], "not a pitch name"),
+        (["--tuning", "drop-q"], "not a pitch name"),
+        (["--capo", "-1"], "must be >= 0"),
+        (["--capo", "two"], "not a whole number"),
+        (["--max-fret", "0"], "must be >= 1"),
+        (["--capo", "22"], "invalid guitar: capo must be in 0..21"),
+        (["--capo", "12", "--max-fret", "12"], "invalid guitar"),
+        (["--tuning", "G9"], "invalid guitar: highest string at max_fret"),
+    ],
+)
+def test_guitar_usage_errors_exit_2_before_transcribing(
+    audio_file: Path, capsys: pytest.CaptureFixture[str], options: list[str], message: str
+) -> None:
+    transcriber = FakeTranscriber()
+
+    with pytest.raises(SystemExit) as exit_info:
+        run(["transcribe", str(audio_file), *options], transcriber)
+
+    assert exit_info.value.code == 2
+    assert message in capsys.readouterr().err
+    assert transcriber.calls == []
+
+
+def test_help_documents_guitar_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["transcribe", "--help"])
+
+    out = " ".join(capsys.readouterr().out.split())
+    for text in (
+        "--tuning NOTES|NAME",
+        "--capo FRET",
+        "--max-fret N",
+        "drop-d",
+        "E2 A2 D3 G3 B3 E4",
+    ):
+        assert text in out

@@ -9,5 +9,13 @@ from guitar_transcription.guitar.positions import (
     pitch_for_position,
     pitch_range,
 )
+from guitar_transcription.guitar.tunings import NAMED_TUNINGS, describe_tuning, parse_tuning
 
-__all__ = ["candidate_positions", "pitch_for_position", "pitch_range"]
+__all__ = [
+    "NAMED_TUNINGS",
+    "candidate_positions",
+    "describe_tuning",
+    "parse_tuning",
+    "pitch_for_position",
+    "pitch_range",
+]

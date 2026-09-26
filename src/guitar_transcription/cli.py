@@ -21,8 +21,10 @@ from guitar_transcription.audio.backends.basic_pitch import (
     BasicPitchTranscriber,
 )
 from guitar_transcription.audio.transcriber import check_audio_path
-from guitar_transcription.domain import PerformanceEvent
+from guitar_transcription.domain import GuitarConfig, Performance, PerformanceEvent
+from guitar_transcription.guitar import NAMED_TUNINGS, describe_tuning, parse_tuning
 from guitar_transcription.pipeline import (
+    DEFAULT_GUITAR,
     NotationRequest,
     NotationResult,
     describe_range,
@@ -66,6 +68,7 @@ def main(
     """Run the CLI and return an exit code. The factories let tests supply fakes."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.guitar = _build_guitar(parser, args)
     _check_notation_options(parser, args)
     return _transcribe(args, make_transcriber, make_tempo_estimator)
 
@@ -95,14 +98,34 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="also write the events to PATH as JSON, for later pipeline stages",
     )
-    transcribe.add_argument(
+    guitar = transcribe.add_argument_group(
+        "guitar",
+        "The instrument played. Notes it can't produce are not detected. Default: "
+        f"{describe_tuning(DEFAULT_GUITAR.open_strings)}, no capo, {DEFAULT_GUITAR.max_fret} frets "
+        f"({describe_range(*detection_range())}).",
+    )
+    guitar.add_argument(
+        "--tuning",
+        type=_tuning,
+        metavar="NOTES|NAME",
+        help=(
+            "open strings from the lowest string up, with octaves, e.g. E2,A2,D3,G3,B3,E4 or "
+            f"B1,E2,A2,D3,G3,B3,E4 (7-string); or a preset: {', '.join(NAMED_TUNINGS)}"
+        ),
+    )
+    guitar.add_argument(
+        "--capo", type=_non_negative_int, metavar="FRET", help="capo position (default: none)"
+    )
+    guitar.add_argument(
+        "--max-fret",
+        type=_positive_int,
+        metavar="N",
+        help=f"highest fret on the neck (default: {DEFAULT_GUITAR.max_fret})",
+    )
+    guitar.add_argument(
         "--full-range",
         action="store_true",
-        help=(
-            "detect notes over the model's full range instead of a standard-tuned 22-fret "
-            f"guitar's ({describe_range(*detection_range())}); use for drop/extended tunings or "
-            "24-fret necks"
-        ),
+        help="detect over the model's full pitch range instead of the guitar's",
     )
     notation = transcribe.add_argument_group(
         "notation",
@@ -182,6 +205,23 @@ def _row(onset: str, offset: str, duration: str, midi: str, note: str, velocity:
     return f"{onset:>9} {offset:>9} {duration:>11} {midi:>5}  {note:<5} {velocity:>8}"
 
 
+def _build_guitar(parser: argparse.ArgumentParser, args: argparse.Namespace) -> GuitarConfig:
+    """The instrument from --tuning/--capo/--max-fret (default: DEFAULT_GUITAR); errors exit 2."""
+    try:
+        return GuitarConfig(
+            open_strings=args.tuning or DEFAULT_GUITAR.open_strings,
+            capo=DEFAULT_GUITAR.capo if args.capo is None else args.capo,
+            max_fret=args.max_fret or DEFAULT_GUITAR.max_fret,
+        )
+    except ValueError as error:
+        parser.error(f"invalid guitar: {error}")
+
+
+def _describe_guitar(guitar: GuitarConfig) -> str:
+    capo = f"capo {guitar.capo}" if guitar.capo else "no capo"
+    return f"{describe_tuning(guitar.open_strings)}, {capo}, {guitar.max_fret} frets"
+
+
 def _check_notation_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """Usage errors (exit 2) before any slow work. Nothing musical is defaulted or guessed."""
     notation_only = {
@@ -217,9 +257,10 @@ def _transcribe(
     except (FileNotFoundError, UnsupportedAudioError) as error:
         return _fail(error, EXIT_BAD_INPUT)
 
-    detect = None if args.full_range else detection_range()
+    guitar: GuitarConfig = args.guitar
+    detect = None if args.full_range else detection_range(guitar)
     scope = "full model range" if detect is None else f"notes {describe_range(*detect)}"
-    print(f"Transcribing {path} ({scope}) ...", file=sys.stderr)
+    print(f"Transcribing {path} (guitar: {_describe_guitar(guitar)}; {scope}) ...", file=sys.stderr)
     try:
         events = make_transcriber(detect).transcribe(path)
     except UnsupportedAudioError as error:  # e.g. the decoder couldn't read the file
@@ -227,22 +268,26 @@ def _transcribe(
     except TranscriptionError as error:
         return _fail(error, EXIT_FAILURE)
 
-    print(format_events_table(events))
+    try:
+        performance = Performance(events, guitar)  # checks any string/fret against the guitar
+    except ValueError as error:
+        return _fail(error, EXIT_FAILURE)
+    print(format_events_table(performance.events))
 
     if args.json is not None:
         try:
-            write_events_json(events, args.json, source=str(path))
+            write_events_json(performance, args.json, source=str(path))
         except OSError as error:
             return _fail(error, EXIT_FAILURE)
         print(f"Wrote {len(events)} events to {args.json}", file=sys.stderr)
 
     if args.musicxml is not None:
-        return _write_notation(events, args, path, make_tempo_estimator)
+        return _write_notation(performance, args, path, make_tempo_estimator)
     return EXIT_OK
 
 
 def _write_notation(
-    events: Sequence[PerformanceEvent],
+    performance: Performance,
     args: argparse.Namespace,
     audio_path: Path,
     make_tempo_estimator: TempoEstimatorFactory,
@@ -252,7 +297,7 @@ def _write_notation(
     )
     try:
         result = notate(
-            events,
+            performance,
             audio_path,
             request,
             # Only built when needed: an explicit tempo always wins.
@@ -268,7 +313,7 @@ def _write_notation(
     except OSError as error:
         return _fail(error, EXIT_FAILURE)
     _report_notation(result, args.musicxml)
-    _report_downbeat(result, events, args.downbeat)
+    _report_downbeat(result, performance.events, args.downbeat)
     return EXIT_OK
 
 
@@ -338,6 +383,30 @@ def _positive_float(text: str) -> float:
         raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
     if not (value > 0 and value != float("inf")):
         raise argparse.ArgumentTypeError(f"must be a positive number, got {text!r}")
+    return value
+
+
+def _tuning(text: str) -> tuple[int, ...]:
+    try:
+        return parse_tuning(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+def _non_negative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {text!r}")
+    return value
+
+
+def _positive_int(text: str) -> int:
+    value = _non_negative_int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {text!r}")
     return value
 
 
