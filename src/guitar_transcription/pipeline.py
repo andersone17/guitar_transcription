@@ -44,12 +44,14 @@ class NotationRequest:
     """What the caller knows about the music. Meter is required; tempo may be estimated.
 
     ``tempo_bpm`` is in quarter notes per minute. When it is given, it always wins and no
-    estimator is consulted.
+    estimator is consulted. ``downbeat_seconds`` is the raw time of a beat 1 (``None``: the first
+    note); notes before it become a pickup bar.
     """
 
     time_signature: TimeSignature
     tempo_bpm: float | None = None
     grid: NoteValue = NoteValue.SIXTEENTH
+    downbeat_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +119,7 @@ def notate(
         quarter_note_bpm=bpm,
         time_signature=request.time_signature,
         grid=request.grid,
+        downbeat_seconds=request.downbeat_seconds,
     )
     return NotationResult(bpm, estimate, quantized, to_single_voice(quantized))
 

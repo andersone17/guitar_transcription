@@ -89,8 +89,7 @@ class BasicPitchTranscriber:
             "onset_threshold": onset_threshold,
             "frame_threshold": frame_threshold,
             "minimum_note_length": minimum_note_length_ms,
-            "minimum_frequency": _midi_to_hz(pitch_range[0]) if pitch_range else None,
-            "maximum_frequency": _midi_to_hz(pitch_range[1]) if pitch_range else None,
+            **_frequency_limits(pitch_range),
         }
         self._inference, self._model = _load_backend()
 
@@ -157,6 +156,20 @@ def _load_backend() -> tuple[Any, Any]:
             f"could not load the Basic Pitch model from {model_path}: {error}"
         ) from error
     return inference, model
+
+
+def _frequency_limits(pitch_range: tuple[int, int] | None) -> dict[str, float | None]:
+    """Basic Pitch frequency limits that keep MIDI ``low``..``high`` *inclusive*.
+
+    Basic Pitch rounds each limit to a note index and zeroes activations with
+    ``[:min_index]`` and ``[max_index:]``, so its minimum is inclusive but its maximum is
+    **exclusive**. Passing ``high``'s own frequency would silently drop ``high`` (e.g. D6 at fret
+    22 of the high E string), so the maximum is the next semitone up.
+    """
+    if pitch_range is None:
+        return {"minimum_frequency": None, "maximum_frequency": None}
+    low, high = pitch_range
+    return {"minimum_frequency": _midi_to_hz(low), "maximum_frequency": _midi_to_hz(high + 1)}
 
 
 def _midi_to_hz(pitch: int) -> float:

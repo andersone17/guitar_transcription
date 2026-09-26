@@ -73,12 +73,22 @@ class QuantizedPerformance:
 
     ``events`` are sorted by (onset, pitch). Overlapping notes are kept as-is (e.g. a held bass
     note under a melody); how to voice them is a notation decision.
+
+    ``origin_seconds`` is the raw recording time of quarter 0, the downbeat of measure 1, so
+    ``seconds = origin_seconds + quarters * 60 / quarter_note_bpm`` maps musical time back to the
+    recording (e.g. for audio/video alignment). It is negative when a pickup bar was added before
+    a downbeat near the start of the recording.
     """
 
     events: tuple[QuantizedEvent, ...]
     quarter_note_bpm: float
     time_signature: TimeSignature
     grid: NoteValue
+    origin_seconds: float = 0.0
+
+    def seconds_at(self, quarters: Fraction) -> float:
+        """Raw recording time of a musical position (inverse of quantization, before snapping)."""
+        return self.origin_seconds + float(quarters) * 60 / self.quarter_note_bpm
 
     @property
     def end_quarters(self) -> Fraction:

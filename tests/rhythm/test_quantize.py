@@ -35,8 +35,17 @@ def q(
     *,
     bpm: float = BPM,
     grid: NoteValue = NoteValue.SIXTEENTH,
+    downbeat: float | None = 0.0,
 ) -> QuantizedPerformance:
-    return quantize(events, quarter_note_bpm=bpm, time_signature=signature, grid=grid)
+    # Most tests check snapping against a known grid, so they pin the downbeat at 0 s explicitly;
+    # the default anchor (first note) and pickups are tested separately below.
+    return quantize(
+        events,
+        quarter_note_bpm=bpm,
+        time_signature=signature,
+        grid=grid,
+        downbeat_seconds=downbeat,
+    )
 
 
 def positions(result: QuantizedPerformance) -> list[tuple[F, F]]:
@@ -206,7 +215,7 @@ def test_rest_between_notes() -> None:
     assert result.rests() == (Rest(F(1), F(1)),)
 
 
-def test_leading_silence_is_a_rest_because_time_zero_is_the_downbeat() -> None:
+def test_leading_silence_is_a_rest_when_the_downbeat_is_at_zero() -> None:
     result = q([ev(0.5, 1.0)])
 
     assert result.rests() == (Rest(F(0), F(1)),)
@@ -369,3 +378,181 @@ def test_rejects_grid_that_does_not_divide_the_measure(
 ) -> None:
     with pytest.raises(ValueError, match="does not divide"):
         q([ev(0.0, 0.5)], signature, grid=grid)
+
+
+# --- strums (review CRITICAL 2) --------------------------------------------------------------
+
+E_MAJOR = [40, 47, 52, 56, 59, 64]
+
+
+def strummed(start: float, spread: float, ring: float = 0.95) -> list[PerformanceEvent]:
+    step = spread / (len(E_MAJOR) - 1)
+    return [ev(start + i * step, start + ring, p) for i, p in enumerate(E_MAJOR)]
+
+
+def test_100ms_strum_stays_one_chord_on_sixteenth_grid() -> None:
+    # Regression: this strum used to become a 4-note sixteenth chord plus a 2-note chord.
+    result = q(strummed(0.0, 0.1) + [ev(0.5, 1.0, 64)])
+
+    chord = [e for e in result.events if e.onset_quarters == F(0)]
+    assert sorted(e.pitch_midi for e in chord) == E_MAJOR
+    assert {e.onset_quarters for e in result.events} == {F(0), F(1)}
+
+
+@pytest.mark.parametrize("spread", [0.02, 0.05, 0.08])
+def test_strums_of_typical_spread_share_one_onset(spread: float) -> None:
+    result = q(strummed(1.0, spread))
+
+    assert {e.onset_quarters for e in result.events} == {F(2)}
+
+
+def test_strum_anchors_at_its_earliest_onset() -> None:
+    # Starts 30 ms before beat 2 and spans 80 ms: lands on beat 2, not 1/4 later.
+    result = q(strummed(0.47, 0.08))
+
+    assert {e.onset_quarters for e in result.events} == {F(1)}
+
+
+def test_strum_notes_keep_their_own_offsets_and_raw_onsets() -> None:
+    events = [ev(0.0, 0.5, 40), ev(0.04, 1.0, 47), ev(0.08, 1.0, 52)]
+
+    result = q(events)
+
+    assert [(e.onset_quarters, e.duration_quarters) for e in result.events] == [
+        (F(0), F(1)),
+        (F(0), F(2)),
+        (F(0), F(2)),
+    ]
+    assert [e.source.onset_seconds for e in result.events] == [0.0, 0.04, 0.08]
+
+
+def test_accurate_fast_sixteenths_are_not_merged() -> None:
+    # 150 BPM sixteenths (100 ms apart), slightly overlapping as ringing notes do.
+    line = [ev(i * 0.1, i * 0.1 + 0.12, 60 + i) for i in range(8)]
+
+    result = q(line, bpm=150)
+
+    assert [e.onset_quarters for e in result.events] == [F(i, 4) for i in range(8)]
+
+
+def test_chord_window_is_capped_below_a_grid_step() -> None:
+    # 240 BPM sixteenth = 62.5 ms, so the window is capped at ~47 ms: overlapping notes 55 ms
+    # apart are separate sixteenths, not a chord.
+    result = q([ev(0.0, 0.2, 60), ev(0.055, 0.2, 64)], bpm=240)
+
+    assert [e.onset_quarters for e in result.events] == [F(0), F(1, 4)]
+
+
+def test_grouping_can_be_disabled() -> None:
+    result = quantize(
+        strummed(0.0, 0.1),
+        quarter_note_bpm=120,
+        time_signature=FOUR_FOUR,
+        chord_window_seconds=0,
+    )
+
+    assert len({e.onset_quarters for e in result.events}) == 2  # the old, split behaviour
+
+
+@pytest.mark.parametrize("window", [-0.01, float("nan"), float("inf")])
+def test_rejects_invalid_chord_window(window: float) -> None:
+    with pytest.raises(ValueError, match="chord_window_seconds"):
+        quantize([], quarter_note_bpm=120, time_signature=FOUR_FOUR, chord_window_seconds=window)
+
+
+# --- downbeat anchor and pickups (review IMPORTANT 7) ---------------------------------------
+
+
+def default_anchor(
+    events: list[PerformanceEvent], downbeat_seconds: float | None = None
+) -> QuantizedPerformance:
+    return quantize(
+        events, quarter_note_bpm=BPM, time_signature=FOUR_FOUR, downbeat_seconds=downbeat_seconds
+    )
+
+
+def test_default_downbeat_is_the_first_note_so_leading_silence_is_ignored() -> None:
+    # 2.3 s of silence before playing starts (webcam/mic case).
+    result = default_anchor([ev(2.3, 2.8, 60), ev(2.8, 3.3, 62), ev(3.3, 4.3, 64)])
+
+    assert positions(result) == [(F(0), F(1)), (F(1), F(1)), (F(2), F(2))]
+    assert result.rests() == ()
+    assert result.origin_seconds == 2.3
+
+
+def test_default_downbeat_with_no_notes_is_zero() -> None:
+    assert default_anchor([]).origin_seconds == 0.0
+
+
+def test_explicit_downbeat_overrides_the_first_note() -> None:
+    result = default_anchor([ev(2.3, 2.8, 60)], downbeat_seconds=1.8)
+
+    assert positions(result) == [(F(1), F(1))]  # one beat after the given downbeat
+    assert result.origin_seconds == 1.8
+
+
+def test_notes_before_the_downbeat_form_a_pickup_bar() -> None:
+    # Pickup on beat 4 (0.5 s), downbeat at 1.0 s: "and-4 | 1".
+    result = default_anchor([ev(0.5, 1.0, 55), ev(1.0, 2.0, 60)], downbeat_seconds=1.0)
+
+    assert positions(result) == [(F(3), F(1)), (F(4), F(2))]
+    assert [FOUR_FOUR.locate(e.onset_quarters) for e in result.events] == [(1, F(3)), (2, F(0))]
+    assert result.rests() == (Rest(F(0), F(3)),)  # measure 1 = 3 beats rest + pickup note
+    assert result.origin_seconds == -1.0  # measure 1 "starts" 2 s before the downbeat
+
+
+def test_pickup_longer_than_a_measure_adds_whole_measures() -> None:
+    # Notes start 6 beats before the downbeat -> 2 pickup measures, first note on beat 3.
+    result = default_anchor([ev(0.0, 0.5, 60), ev(3.0, 3.5, 64)], downbeat_seconds=3.0)
+
+    assert [e.onset_quarters for e in result.events] == [F(2), F(8)]
+    assert FOUR_FOUR.locate(F(8)) == (3, F(0))
+
+
+def test_pickup_in_three_four() -> None:
+    result = quantize(
+        [ev(0.5, 1.0, 55), ev(1.0, 1.5, 60)],
+        quarter_note_bpm=BPM,
+        time_signature=THREE_FOUR,
+        downbeat_seconds=1.0,
+    )
+
+    assert [THREE_FOUR.locate(e.onset_quarters) for e in result.events] == [(1, F(2)), (2, F(0))]
+
+
+def test_slightly_early_chord_does_not_create_an_empty_pickup_bar() -> None:
+    # Strum starts 20 ms before the stated downbeat: it snaps onto the downbeat, no pickup.
+    strum = [ev(0.98 + 0.01 * i, 1.9, p) for i, p in enumerate([40, 47, 52])]
+
+    result = default_anchor(strum, downbeat_seconds=1.0)
+
+    assert {e.onset_quarters for e in result.events} == {F(0)}
+    assert result.origin_seconds == 1.0
+
+
+def test_seconds_at_maps_musical_time_back_to_the_recording() -> None:
+    raw = [ev(0.52, 1.0, 55), ev(1.013, 2.0, 60), ev(2.49, 3.0, 64)]
+
+    result = default_anchor(raw, downbeat_seconds=1.0)
+
+    for event in result.events:
+        # Within half a sixteenth (62.5 ms) of the raw onset, since snapping moved it at most that.
+        assert result.seconds_at(event.onset_quarters) == pytest.approx(
+            event.source.onset_seconds, abs=0.0625
+        )
+
+
+def test_downbeat_does_not_change_raw_timing() -> None:
+    raw = [ev(0.52, 1.0, 55), ev(1.013, 2.0, 60)]
+    before = copy.deepcopy(raw)
+
+    result = default_anchor(raw, downbeat_seconds=1.0)
+
+    assert raw == before
+    assert [e.source.onset_seconds for e in result.events] == [0.52, 1.013]
+
+
+@pytest.mark.parametrize("downbeat", [-0.1, float("nan"), float("inf")])
+def test_rejects_invalid_downbeat(downbeat: float) -> None:
+    with pytest.raises(ValueError, match="downbeat_seconds"):
+        default_anchor([ev(0.0, 0.5, 60)], downbeat_seconds=downbeat)

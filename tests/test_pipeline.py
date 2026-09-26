@@ -181,3 +181,40 @@ def test_no_notes_still_gives_valid_notation(tmp_path: Path) -> None:
     path = write_notation(result, tmp_path / "empty.musicxml", title="empty")
 
     assert len(converter.parse(path).parts[0].getElementsByClass(stream.Measure)) == 1
+
+
+def test_strum_reaches_musicxml_as_one_chord(tmp_path: Path) -> None:
+    # Review CRITICAL 2: a 100 ms downstroke on beat 1, then a single note on beat 2.
+    e_major = [40, 47, 52, 56, 59, 64]
+    strum = [
+        PerformanceEvent(onset_seconds=0.02 * i, offset_seconds=0.48, pitch_midi=p)
+        for i, p in enumerate(e_major)
+    ]
+    melody = [PerformanceEvent(onset_seconds=0.5, offset_seconds=0.98, pitch_midi=64)]
+
+    result = notate(strum + melody, tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=120))
+    score = converter.parse(write_notation(result, tmp_path / "strum.musicxml", title="strum"))
+
+    first, second = list(score.recurse().notes)[:2]
+    assert sorted(p.midi for p in first.pitches) == e_major
+    assert float(first.quarterLength) == 1.0
+    assert [p.midi for p in second.pitches] == [64]
+    assert [e.source.onset_seconds for e in result.voiced.events[:6]] == [
+        0.02 * i for i in range(6)
+    ]  # raw per-string onsets preserved (future strum-direction evidence)
+
+
+def test_downbeat_request_reaches_rhythm_and_notation(tmp_path: Path) -> None:
+    # Pickup A3 on beat 4 before a downbeat at 2.0 s; raw seconds must survive untouched.
+    events = [
+        PerformanceEvent(onset_seconds=1.5, offset_seconds=1.98, pitch_midi=57),
+        PerformanceEvent(onset_seconds=2.0, offset_seconds=2.98, pitch_midi=62),
+    ]
+    request = NotationRequest(FOUR_FOUR, tempo_bpm=120, downbeat_seconds=2.0)
+
+    result = notate(events, tmp_path / "t.wav", request)
+    score = converter.parse(write_notation(result, tmp_path / "p.musicxml", title="p"))
+
+    assert result.voiced.origin_seconds == 0.0  # measure 1 starts 2 s (one bar) before 2.0 s
+    assert [(n.measureNumber, float(n.beat)) for n in score.recurse().notes] == [(1, 4.0), (2, 1.0)]
+    assert [e.source.onset_seconds for e in result.voiced.events] == [1.5, 2.0]

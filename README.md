@@ -156,9 +156,9 @@ uv sync --extra basic-pitch --extra tempo      # ~2 GB (TensorFlow); first run i
   clean electric; heavy distortion and effects hurt.
 - **Standard tuning, up to fret 22** (E2–D6). For drop tunings, 7-string, or 24-fret playing, add
   `--full-range`.
-- **A single melody or simple chords, at a steady tempo.** Start playing on beat 1, about 0.1 s in:
-  the recording's start is treated as the first downbeat, so a long silence or a pickup shifts every
-  barline.
+- **A single melody or simple chords, at a steady tempo.** Silence before you start is fine: the
+  first detected note is taken as beat 1. If the piece starts with a pickup (upbeat), note the time
+  of the first *downbeat* from the transcription table and pass it with `--downbeat SECONDS`.
 - **WAV or FLAC, 30 s or less, recorded close to the guitar.** Save it in `data/raw/`, which is
   git-ignored.
 
@@ -205,8 +205,13 @@ Stage 1 is an audio-only baseline. Specifically, it:
 - **Requires you to give the meter.** `--time-signature` is mandatory. It isn't inferred, because
   3/4 vs 6/8 and similar choices are unreliable from solo guitar audio (see PLAN.md §2a).
 - **Interprets rhythm only simply:**
-  - one constant tempo, and the first downbeat is fixed at 0 s, so there's no pickup support;
+  - one constant tempo. Beat 1 is the first detected note unless you pass `--downbeat`, which
+    isn't detected automatically. A pickup is written as a full first measure starting with rests,
+    not as a shortened (anacrusis) measure;
   - notes snap to a straight grid, so triplets and swing come out wrong;
+  - strums are grouped into one chord only if they span ≤ 100 ms with ≤ 50 ms between strings.
+    Basic Pitch's onset jitter on chords can exceed that, so on the default sixteenth grid a strum
+    can still split into two chords. Use `--grid eighth` for strummed accompaniment;
   - output is a single voice: notes that ring over the next one are cut short, and a bass line
     under a melody isn't shown separately;
   - `--auto-tempo` can land on half or double time;
@@ -317,15 +322,22 @@ uv run guitar-transcribe transcribe path/to/audio.wav \
 | `--auto-tempo` | Estimate the tempo by beat tracking (librosa) instead. The detected pulse is used as the quarter note. It can't be combined with `--tempo`; an explicit tempo always takes precedence. |
 | `--time-signature N/D` | e.g. `4/4`, `3/4`, `6/8`, `2/2`. |
 | `--grid VALUE` | Finest subdivision to snap to: `whole`, `half`, `quarter`, `eighth`, or `sixteenth` (default). |
+| `--downbeat SECONDS` | Raw time of a beat 1 (read it from the table). Earlier notes become a pickup bar. Default: the first detected note. |
 
 How it works:
 - The table and `--json` still show **raw** timing. Quantization only affects the MusicXML.
-- Second 0 of the recording is beat 1 of measure 1 (there is no pickup), so silence before the first
-  note becomes a rest. Trim leading silence, or count it in.
+- The first detected note is beat 1 of measure 1, so silence before playing doesn't matter. For a
+  piece that starts with a pickup, pass `--downbeat SECONDS`: the raw time of a beat 1, as shown in
+  the table. Notes before it are written as a pickup at the end of measure 1, after leading rests.
+  `--downbeat 0` makes the recording's start beat 1.
 - Notes are snapped to the grid, overlapping notes (let-ring) are shortened into a single voice, and
   simultaneous notes become chords. Ties across barlines, dots, and rests are handled.
 - The output is one "Guitar" part in treble clef 8vb (guitar sounds an octave lower than written).
   There is no tablature yet.
+
+Strummed chords: the strings of a strum sound one after another, so near-simultaneous notes are
+grouped into one chord before snapping. For strummed accompaniment, prefer `--grid eighth`. The
+model's onsets for chord notes can be spread wider than a sixteenth grid can absorb.
 
 Choosing a grid: `sixteenth` keeps the most detail but shows every early note release as a short note
 plus a rest. `eighth` reads more cleanly for simple lines, but notes closer together than an eighth

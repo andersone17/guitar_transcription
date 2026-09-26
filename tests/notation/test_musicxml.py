@@ -35,7 +35,9 @@ def export(
     bpm: float = 120.0,
     title: str | None = "Test clip",
 ) -> Path:
-    quantized = to_single_voice(quantize(events, quarter_note_bpm=bpm, time_signature=signature))
+    quantized = to_single_voice(
+        quantize(events, quarter_note_bpm=bpm, time_signature=signature, downbeat_seconds=0.0)
+    )
     return write_musicxml(quantized, tmp_path / "out.musicxml", title=title)
 
 

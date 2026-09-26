@@ -13,7 +13,10 @@ you know exactly, so you can tell *which stage* is at fault when something is of
 - Standard tuning, clean tone, one guitar, no other sound. Use a metronome **in headphones only**.
 - At ♩ = 80, play a G major scale in steady **eighth notes**: G2 A2 B2 C3 D3 E3 F#3 G3 A3 B3 C4 D4 E4 F#4
   G4, then back down to G2. Let the last note ring for a bar.
-- Start the first note right on a click, about 0.1–0.2 s into the recording.
+- Start the first note on a click; leading silence doesn't matter (the first note is beat 1).
+- Optional pickup check: record a second take that starts with one D3 on beat 4 *before* the scale's
+  first G2, and run step b) with `--downbeat <time of the G2 from the table>`. The D3 should appear
+  as a pickup at the end of measure 1, and the G2 on beat 1 of measure 2.
 
 **2. Stage by stage:**
 
@@ -35,7 +38,7 @@ uv run guitar-transcribe transcribe data/raw/g_major_ref.wav \
 | Stage | Pass if | If it fails, the likely cause is |
 |---|---|---|
 | a) Transcription | 29 notes, pitches G2…G4…G2 in order; onsets about 0.375 s apart; no notes above D6 | Basic Pitch: missed low notes, octave errors, or extra notes from ringing strings. Try a cleaner or louder take. |
-| b) Known-tempo notation | 4–5 measures of 4/4 at ♩ = 80, all eighth notes (the last one longer), no chords, no rests between scale notes | Rhythm/notation. If notes are shifted by a constant amount, the take started late (the first downbeat is fixed at 0 s). |
+| b) Known-tempo notation | 4–5 measures of 4/4 at ♩ = 80, all eighth notes (the last one longer), no chords, no rests between scale notes | Rhythm/notation. If every barline is shifted, the first detected note wasn't beat 1 (a stray noise, or a pickup): pass `--downbeat`. |
 | c) Auto tempo | "Estimated tempo" within ~2% of 80, 160 or 40. Using the suggested value that's near 80 gives the same result as b) | Tempo estimation. 160 is expected here (every eighth note gets a beat); rerun with the suggested `--tempo`. |
 | Open in MuseScore | Title `g_major_ref`, one Guitar staff with a treble-8 clef, ♩ = 80, notes readable | MusicXML/viewer. Validate with the schema check below. |
 

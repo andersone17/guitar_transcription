@@ -107,7 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
     notation = transcribe.add_argument_group(
         "notation",
         "Quantize the events and write standard notation. --musicxml requires --time-signature "
-        "(meter is not inferred) and either --tempo or --auto-tempo. Measure 1 starts at 0 s.",
+        "(meter is not inferred) and either --tempo or --auto-tempo. Beat 1 of the first measure "
+        "is the first detected note unless --downbeat says otherwise.",
     )
     notation.add_argument(
         "--musicxml",
@@ -141,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=str.lower,
         choices=[value.name.lower() for value in NoteValue],
         help="finest rhythmic subdivision to snap to (default: sixteenth)",
+    )
+    notation.add_argument(
+        "--downbeat",
+        type=_non_negative_float,
+        metavar="SECONDS",
+        help=(
+            "raw time (as in the table) of a beat 1; notes before it become a pickup bar "
+            "(default: the first detected note; use 0 to start measure 1 at the recording start)"
+        ),
     )
     return parser
 
@@ -179,6 +189,7 @@ def _check_notation_options(parser: argparse.ArgumentParser, args: argparse.Name
         "--auto-tempo": args.auto_tempo or None,
         "--time-signature": args.time_signature,
         "--grid": args.grid,
+        "--downbeat": args.downbeat,
     }
     if args.musicxml is None:
         given = [flag for flag, value in notation_only.items() if value is not None]
@@ -236,7 +247,9 @@ def _write_notation(
     audio_path: Path,
     make_tempo_estimator: TempoEstimatorFactory,
 ) -> int:
-    request = NotationRequest(args.time_signature, tempo_bpm=args.tempo, grid=_grid(args))
+    request = NotationRequest(
+        args.time_signature, tempo_bpm=args.tempo, grid=_grid(args), downbeat_seconds=args.downbeat
+    )
     try:
         result = notate(
             events,
@@ -255,7 +268,22 @@ def _write_notation(
     except OSError as error:
         return _fail(error, EXIT_FAILURE)
     _report_notation(result, args.musicxml)
+    _report_downbeat(result, events, args.downbeat)
     return EXIT_OK
+
+
+def _report_downbeat(
+    result: NotationResult, events: Sequence[PerformanceEvent], downbeat: float | None
+) -> None:
+    if downbeat is None:
+        downbeat = min((e.onset_seconds for e in events), default=0.0)
+        source = "the first detected note; set --downbeat if the piece starts with a pickup"
+    else:
+        source = "--downbeat"
+    line = f"Beat 1 of the first full measure is at {downbeat:.3f} s ({source})."
+    if result.voiced.origin_seconds < downbeat - 1e-9:
+        line += " Earlier notes are written as a pickup in measure 1."
+    print(line, file=sys.stderr)
 
 
 def _report_notation(result: NotationResult, path: Path) -> None:
@@ -310,6 +338,16 @@ def _positive_float(text: str) -> float:
         raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
     if not (value > 0 and value != float("inf")):
         raise argparse.ArgumentTypeError(f"must be a positive number, got {text!r}")
+    return value
+
+
+def _non_negative_float(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not (0 <= value < float("inf")):
+        raise argparse.ArgumentTypeError(f"must be a number >= 0, got {text!r}")
     return value
 
 

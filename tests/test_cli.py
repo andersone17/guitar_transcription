@@ -574,3 +574,106 @@ def test_full_range_disables_the_limit(
     assert main(["transcribe", str(audio_file), "--full-range"], make_transcriber=factory) == 0
     assert ranges == [None]
     assert "full model range" in capsys.readouterr().err
+
+
+# --- downbeat / pickup (review IMPORTANT 7) --------------------------------------------------
+
+# Leading silence, then a pickup on beat 4 (1.5 s) before the downbeat at 2.0 s (quarter = 120).
+PICKUP_EVENTS = [
+    PerformanceEvent(onset_seconds=1.5, offset_seconds=1.98, pitch_midi=55),
+    PerformanceEvent(onset_seconds=2.0, offset_seconds=2.98, pitch_midi=60),
+]
+
+
+def notation_args(audio_file: Path, out: Path, *extra: str) -> list[str]:
+    return [
+        "transcribe", str(audio_file), "--tempo", "120", "--time-signature", "4/4",
+        "--musicxml", str(out), *extra,
+    ]  # fmt: skip
+
+
+def test_default_downbeat_is_the_first_note(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from music21 import converter
+
+    out = tmp_path / "n.musicxml"
+
+    assert run(notation_args(audio_file, out), FakeTranscriber(PICKUP_EVENTS)) == EXIT_OK
+
+    first = next(iter(converter.parse(out).recurse().notesAndRests))
+    assert (first.isRest, first.nameWithOctave, first.measureNumber) == (False, "G3", 1)
+    assert "first detected note" in capsys.readouterr().err
+
+
+def test_downbeat_option_writes_a_pickup_bar(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from music21 import converter
+
+    out = tmp_path / "n.musicxml"
+
+    code = run(notation_args(audio_file, out, "--downbeat", "2.0"), FakeTranscriber(PICKUP_EVENTS))
+
+    assert code == EXIT_OK
+    notes = list(converter.parse(out).recurse().notes)
+    assert [(n.nameWithOctave, n.measureNumber, float(n.beat)) for n in notes] == [
+        ("G3", 1, 4.0),  # pickup on beat 4 of measure 1 (after 3 beats of rest)
+        ("C4", 2, 1.0),  # the stated downbeat is beat 1 of measure 2
+    ]
+    err = capsys.readouterr().err
+    assert "2.000 s (--downbeat)" in err and "pickup in measure 1" in err
+
+
+def test_downbeat_zero_restores_recording_start_as_beat_1(audio_file: Path, tmp_path: Path) -> None:
+    from music21 import converter
+
+    out = tmp_path / "n.musicxml"
+
+    assert (
+        run(notation_args(audio_file, out, "--downbeat", "0"), FakeTranscriber(PICKUP_EVENTS)) == 0
+    )
+    first = next(iter(converter.parse(out).recurse().notesAndRests))
+    assert first.isRest and float(first.quarterLength) == 3.0  # 1.5 s of silence = 3 beats
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--downbeat", "1.0"], "--downbeat only apply to notation output"),
+        (
+            [
+                "--musicxml",
+                "o.musicxml",
+                "--tempo",
+                "120",
+                "--time-signature",
+                "4/4",
+                "--downbeat",
+                "-1",
+            ],
+            ">= 0",
+        ),
+        (
+            [
+                "--musicxml",
+                "o.musicxml",
+                "--tempo",
+                "120",
+                "--time-signature",
+                "4/4",
+                "--downbeat",
+                "x",
+            ],
+            "not a number",
+        ),
+    ],
+)
+def test_downbeat_usage_errors(
+    audio_file: Path, capsys: pytest.CaptureFixture[str], extra: list[str], message: str
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        run(["transcribe", str(audio_file), *extra], FakeTranscriber())
+
+    assert exit_info.value.code == 2
+    assert message in capsys.readouterr().err

@@ -55,7 +55,8 @@ src/guitar_transcription/
     rhythm/          # performance time -> musical time (pure Python, no music21)
         values.py        NoteValue, RhythmicDuration, TimeSignature (measure length, locate)
         quantized.py     QuantizedEvent (source event + onset/duration in quarters), Rest, QuantizedPerformance
-        quantize.py      quantize(events, quarter_note_bpm, time_signature, grid), check_grid
+        chords.py        group_simultaneous: strum onsets -> one chord group (before snapping)
+        quantize.py      quantize(events, quarter_note_bpm, time_signature, grid, chord_window_seconds)
         voices.py        to_single_voice / is_single_voice (Stage 1 notation simplification)
         tempo.py         TempoEstimator Protocol, TempoEstimate, tempo_from_beat_times, resolve_tempo
         backends/
@@ -184,9 +185,13 @@ performance, not the performance itself. As of M5 they are deliberately small:
 - There is no TempoMap/MeterMap. One tempo and one meter are fields; levels 2–4 will replace those
   fields, not the event type.
 
-**How time zero maps to the grid (level 1):** second 0 of the recording is the downbeat of measure 1.
-There's no pickup and no lead-in offset, so silence before the first note is a leading rest.
-`quarters = seconds × quarter_note_bpm / 60`.
+**How recording time maps to the grid (level 1):** a *downbeat* (raw seconds of a beat 1) anchors the
+grid. It's user-given (`--downbeat`), or else the first detected note's onset.
+`quarters = (seconds − downbeat) × quarter_note_bpm / 60`, snapped. If any note snaps before the
+downbeat, everything shifts by whole measures, so the pickup sits at the end of measure 1 after leading
+rests. `QuantizedPerformance.origin_seconds` records the raw time of measure 1's downbeat, and
+`seconds_at(q)` maps back, which audio/video alignment will need. A true partial first measure
+(anacrusis) is a later notation refinement.
 
 ### Meter inference: findings and decision (2026-09-26)
 
@@ -247,7 +252,8 @@ A wrong meter is worse than asking: every barline, tie and beam in the MusicXML 
 **What would change this decision / next steps:**
 1. The bigger practical gap is *phase*, not the meter label. Measure 1 starting at 0 s breaks any
    recording with a lead-in or pickup. A user-specified first-downbeat offset (or pickup length) is
-   cheap and deterministic, and worth doing before any automatic downbeat work.
+   cheap and deterministic, and worth doing before any automatic downbeat work. *Done 2026-09-26:*
+   `--downbeat`, and the default is now the first note.
 2. In Stage 2, evaluate Beat This! (isolated environment/subprocess) and the dependency-free symbolic
    baseline on annotated guitar data that includes real 3/4 and 6/8 material, not just GuitarSet's 4/4.
 3. Only if that shows useful accuracy, add a `MeterEstimator` returning ranked candidates
@@ -302,6 +308,9 @@ upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real in
 - Note-event values are **numpy scalars** (`float64` times, `int64` pitch, `float32` amplitude), and
   pitch bends are a list even with `multiple_pitch_bends=False`. `amplitude` is the mean frame
   activation over the note, and Basic Pitch's own MIDI export uses it as velocity (`round(127 * amplitude)`).
+- `minimum_frequency`/`maximum_frequency` are rounded to note bins and applied as `[:min]` / `[max:]`,
+  so the minimum is **inclusive** and the maximum is **exclusive**. The adapter passes `high + 1` so
+  that `pitch_range=(low, high)` means inclusive on both ends.
 - Input is decoded with `librosa.load` (documented: .mp3 .ogg .wav .flac .m4a), downmixed to mono, and
   resampled to 22050 Hz. Undecodable files raise `audioread.exceptions.NoBackendError`.
 - `predict()` prints a progress line to stdout, and importing the package logs warnings about
@@ -641,3 +650,36 @@ Also later: chord-symbol inference, multi-voice notation.
 - 2026-09-26 — Integration tests use `tests/conftest.py`'s `write_plucked_notes` fixture (synthesized in
   code), so no audio is committed. Measured: the full pipeline takes ~6 s for a 30 s clip on an 8-core
   CPU (warm).
+- 2026-09-26 — Fixed (review CRITICAL 1): the Basic Pitch adapter passed the top note's own frequency
+  as `maximum_frequency`, which Basic Pitch treats as exclusive, so the default E2–D6 range silently
+  dropped D6 (fret 22, high E). It now passes the next semitone. Guarded by unit tests that replicate
+  Basic Pitch's bin arithmetic, and by a real-model integration test at both range edges; both fail on
+  the old code.
+- 2026-09-26 — Fixed (review CRITICAL 2): the quantizer snapped each note alone, so a 100 ms strum was
+  split into a 4-note and a 2-note chord. Now `rhythm.chords.group_simultaneous` groups onsets
+  first, and each group snaps as one, anchored at its earliest raw onset (each note keeps its own
+  offset; raw per-string onsets stay in `source` for future strum-direction evidence). A note joins
+  a group only if all of these hold:
+  - it starts ≤ 50 ms after the previous note (strum string gap vs. melodic spacing);
+  - it starts ≤ 100 ms after the group's first note, capped at 0.8 of a grid step;
+  - the group is still sounding;
+  - its pitch is new to the group.
+
+  The consecutive-gap rule is what keeps let-ring sixteenth arpeggios (85–125 ms apart) from
+  becoming fake chords.
+- 2026-09-26 — Limitation found while fixing it: on real Basic Pitch output of synthesized strums,
+  chord-note onsets jitter by up to ~±60 ms (one G-chord spanned 116 ms, with a 58 ms gap), and
+  ringing strings produce spurious re-attacks. On a sixteenth grid at 120 BPM that can still split a
+  chord, and no constant fixes it without merging sixteenth arpeggios. Advice: use `--grid eighth`
+  for strummed material. Tune `DEFAULT_CHORD_WINDOW_SECONDS`/`MAX_STRING_GAP_SECONDS` in Stage 2 on
+  GuitarSet comping (annotated strums), not on synthetic audio.
+- 2026-09-26 — Fixed (review IMPORTANT 7): bar 1 no longer starts at 0 s.
+  - **Default change:** beat 1 is now the first detected note, so silence before playing (the normal
+    webcam/mic case) doesn't shift barlines. `--downbeat SECONDS` (`quantize(downbeat_seconds=)`)
+    sets a real downbeat, and earlier notes become a pickup bar.
+  - The pickup decision uses *snapped* positions, so a chord struck 20 ms early doesn't create an
+    empty measure.
+  - A pickup is written as a full measure with leading rests (valid, readable), not as an anacrusis.
+  - `origin_seconds` / `seconds_at()` give an exact musical → recording time map.
+  - The downbeat is never inferred (see the meter findings). A stray noise before the music will
+    become beat 1, and `--downbeat` is the fix.

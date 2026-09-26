@@ -36,3 +36,26 @@ def test_transcribes_synthesized_plucked_notes(
         assert event.offset_seconds > event.onset_seconds
         assert event.velocity is not None and 0.0 < event.velocity <= 1.0
         assert event.string is None and event.fret is None
+
+
+# Lowest and highest notes of a standard-tuned 22-fret guitar: open low E (E2) and D6.
+RANGE_EDGE_NOTES = [(0.0, 40), (0.6, 86), (1.2, 86)]
+
+
+@pytest.mark.parametrize(
+    ("pitch_range", "expected"),
+    [
+        ((40, 86), [40, 86, 86]),  # both ends are inclusive
+        ((41, 85), []),  # one semitone tighter on each side excludes both
+    ],
+)
+def test_pitch_range_limits_are_inclusive_with_the_real_model(
+    tmp_path: Path, write_plucked_notes: Any, pitch_range: tuple[int, int], expected: list[int]
+) -> None:
+    # Regression: Basic Pitch's maximum frequency is exclusive; D6 used to be dropped silently.
+    pytest.importorskip("basic_pitch", reason="requires the basic-pitch extra")
+    audio = write_plucked_notes(tmp_path / "edges.wav", RANGE_EDGE_NOTES)
+
+    events = BasicPitchTranscriber(pitch_range=pitch_range).transcribe(audio)
+
+    assert [e.pitch_midi for e in events] == expected

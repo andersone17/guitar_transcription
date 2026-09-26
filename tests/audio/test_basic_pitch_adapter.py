@@ -181,12 +181,43 @@ def test_passes_defaults_model_and_path_to_predict(backend: FakeBackend, audio_f
     assert call["model_or_model_path"] is not None
 
 
-def test_pitch_range_becomes_frequency_limits(backend: FakeBackend, audio_file: Path) -> None:
-    BasicPitchTranscriber(pitch_range=(40, 88)).transcribe(audio_file)  # E2..E6
+BASIC_PITCH_LOWEST_NOTE = 21  # its note bins cover MIDI 21..108 (piano range)
+
+
+def notes_basic_pitch_keeps(min_frequency: float, max_frequency: float) -> list[int]:
+    """Replicates basic_pitch.note_creation.constrain_frequency (0.4.0): each limit is rounded to
+    a note-bin index, then bins ``[:min_index]`` and ``[max_index:]`` are zeroed. So the minimum
+    is inclusive and the maximum is exclusive.
+    """
+
+    def index(frequency: float) -> int:
+        return round(12 * math.log2(frequency / 440) + 69 - BASIC_PITCH_LOWEST_NOTE)
+
+    bins = range(88)
+    kept = [b for b in bins if index(min_frequency) <= b < index(max_frequency)]
+    return [b + BASIC_PITCH_LOWEST_NOTE for b in kept]
+
+
+@pytest.mark.parametrize("pitch_range", [(40, 86), (40, 88), (35, 88), (60, 60), (21, 107)])
+def test_pitch_range_is_inclusive_at_both_ends(
+    backend: FakeBackend, audio_file: Path, pitch_range: tuple[int, int]
+) -> None:
+    # Regression: the maximum used to be the top note's own frequency, which Basic Pitch treats
+    # as exclusive, so D6 (fret 22 on the high E string) could never be detected.
+    BasicPitchTranscriber(pitch_range=pitch_range).transcribe(audio_file)
 
     [call] = backend.predict_calls
-    assert call["minimum_frequency"] == pytest.approx(82.4069, abs=1e-3)
-    assert call["maximum_frequency"] == pytest.approx(1318.5102, abs=1e-3)
+    low, high = pitch_range
+    kept = notes_basic_pitch_keeps(call["minimum_frequency"], call["maximum_frequency"])
+    assert kept == list(range(low, high + 1))
+
+
+def test_standard_guitar_range_limits(backend: FakeBackend, audio_file: Path) -> None:
+    BasicPitchTranscriber(pitch_range=(40, 86)).transcribe(audio_file)  # E2..D6
+
+    [call] = backend.predict_calls
+    assert call["minimum_frequency"] == pytest.approx(82.407, abs=1e-3)  # E2 itself
+    assert call["maximum_frequency"] == pytest.approx(1244.508, abs=1e-3)  # D#6: first excluded
 
 
 def test_custom_thresholds_are_forwarded(backend: FakeBackend, audio_file: Path) -> None:
