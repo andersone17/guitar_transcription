@@ -142,7 +142,16 @@ Requires [uv](https://docs.astral.sh/uv/). Python is pinned to **3.11** (see PLA
 ```bash
 uv python install 3.11      # once; uv sync will also fetch it automatically
 uv sync                     # creates .venv with the package (editable) + dev tools
-uv run pytest               # tests
+uv run pytest               # fast tests (no model inference)
 uv run ruff check           # lint
 uv run ruff format --check  # formatting
 ```
+
+Audio transcription uses Spotify Basic Pitch as an optional extra (it pulls in TensorFlow 2.15):
+
+```bash
+uv sync --extra basic-pitch     # a later plain `uv sync` removes it again
+uv run pytest -m integration    # real model inference on a synthesized clip
+```
+
+To try it on your own recording, see [docs/manual-testing.md](docs/manual-testing.md).

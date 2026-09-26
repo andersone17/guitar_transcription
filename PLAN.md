@@ -159,11 +159,11 @@ Goal: given an audio file of solo guitar, produce (a) a performance MIDI file an
 that opens in MuseScore as readable standard notation. The events must carry candidate-position
 information hooks for later tablature work, without choosing fingerings.
 
-### Proposed Stage 1 dependencies (not yet installed)
+### Stage 1 dependencies
 
 | Purpose | Package | Where | Why |
 |---|---|---|---|
-| Transcription backend | `basic-pitch==0.4.0` | optional extra `basic-pitch` | Pretrained polyphonic AMT, Apache-2.0, returns note events directly |
+| Transcription backend | `basic-pitch==0.4.0` (+ `setuptools<82`) | optional extra `basic-pitch` (**installed M3**) | Pretrained polyphonic AMT, Apache-2.0, returns note events directly |
 | MusicXML writing | `music21>=10` | core | Mature, BSD-3; handles durations, ties, measures, clefs, chords, and MusicXML export |
 | MIDI writing | `mido` | core | Tiny, pure-Python (MIT); exact-time performance MIDI without quantization |
 | Tests | `pytest` | `dev` dependency group | Requested standard |
@@ -183,7 +183,8 @@ Build backend: `hatchling`. Environment tool: `uv` (already installed), though a
 - The system Python here is 3.12. We'll use `uv python install 3.11` plus a `.python-version` file.
 - The upper bound is loosened when the Basic Pitch backend is replaced or updated.
 
-Basic Pitch facts relevant to the adapter (verified from source on `main`):
+Basic Pitch facts relevant to the adapter (re-verified 2026-09-26 against the installed 0.4.0 wheel,
+upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real inference run):
 - `basic_pitch.inference.predict(audio_path, model_or_model_path=ICASSP_2022_MODEL_PATH, onset_threshold=0.5,
   frame_threshold=0.3, minimum_note_length=127.7 (ms), minimum_frequency=None, maximum_frequency=None,
   multiple_pitch_bends=False, melodia_trick=True, midi_tempo=120)` → `(model_output: dict[str, ndarray],
@@ -194,6 +195,16 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - It is instrument-agnostic, trained on multiple instruments and not specifically on guitar. `amplitude`
   is a mean posteriorgram activation, not a calibrated probability.
 - License: Apache-2.0. Weights ship inside the wheel, so there's nothing to download or commit.
+- Note-event values are **numpy scalars** (`float64` times, `int64` pitch, `float32` amplitude), and
+  pitch bends are a list even with `multiple_pitch_bends=False`. `amplitude` is the mean frame
+  activation over the note, and Basic Pitch's own MIDI export uses it as velocity (`round(127 * amplitude)`).
+- Input is decoded with `librosa.load` (documented: .mp3 .ogg .wav .flac .m4a), downmixed to mono, and
+  resampled to 22050 Hz. Undecodable files raise `audioread.exceptions.NoBackendError`.
+- `predict()` prints a progress line to stdout, and importing the package logs warnings about
+  missing optional runtimes.
+- **Install breakage:** basic-pitch pins `resampy<0.4.3`, and resampy 0.4.2 imports `pkg_resources`,
+  which setuptools 82 removed. A fresh install then fails at `import basic_pitch.inference`, so the
+  extra also pins `setuptools<82`.
 
 ### Milestones and acceptance criteria
 
@@ -229,19 +240,25 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - ✅ `pitch_range(config)` = (lowest open string + capo, highest open string + max_fret).
 - ✅ Pitches outside the range return no candidates; they do not raise.
 
-**M3 — Audio transcription interface and Basic Pitch adapter**
-- `AudioTranscriber` Protocol: `transcribe(path, options) -> list[AudioNoteEvidence]`.
-- `BasicPitchTranscriber` lazily imports `basic_pitch`, loads the model once, and passes the
-  `GuitarConfig`'s frequency range as `minimum_frequency`/`maximum_frequency`.
-- `evidence_to_events(evidence, config) -> Performance` performs the Stage 1 1:1 mapping
-  (amplitude → `audio_confidence` and velocity; `string`/`fret` stay `None`).
-- ✅ Unit tests use a fake transcriber and never import `basic_pitch`.
+**M3 — Audio transcription interface and Basic Pitch adapter** — *done 2026-09-26*
+- `audio/transcriber.py`: `AudioTranscriber` Protocol, `transcribe(path) -> list[PerformanceEvent]`
+  (raw timing, sorted), plus errors `TranscriptionError` ⊃ {`UnsupportedAudioError`,
+  `BackendUnavailableError`}. A missing file raises `FileNotFoundError`.
+- `audio/backends/basic_pitch.py`: `BasicPitchTranscriber(onset_threshold, frame_threshold,
+  minimum_note_length_ms, pitch_range)` imports `basic_pitch` and loads the model once, at construction.
+  `pitch_range` (MIDI, e.g. `guitar.pitch_range(config)`) becomes `minimum_frequency`/`maximum_frequency`.
+  amplitude → `velocity` only; `string`/`fret`/confidences stay `None`.
+- ✅ Unit tests use a fake `basic_pitch` package injected into `sys.modules` (no TensorFlow/numpy).
+  The fake returns numpy-like scalar types.
 - ✅ Importing `guitar_transcription.audio` works without Basic Pitch installed. Using the backend
   without it raises a clear error that names the install extra.
 - ✅ Integration test (`@pytest.mark.integration`, auto-skipped without the extra): a synthesized
   WAV (stdlib `wave` + plucked-string synthesis) of 3–4 known notes a few hundred ms apart is transcribed
   with the correct pitches, and onsets are within 50 ms.
-- ✅ A grep/test confirms `basic_pitch` is imported only in `audio/backends/basic_pitch.py`.
+- ✅ A test confirms `basic_pitch` is imported only in `audio/backends/basic_pitch.py` (static and
+  `importlib` imports), and that importing the adapter module loads no heavy packages.
+- ✅ Integration tests are opt-in (`pytest -m integration`), so the default run stays fast.
+  The manual procedure for a real recording is in `docs/manual-testing.md`.
 
 **M4 — Performance MIDI export**
 - `write_midi(performance, path)` writes unquantized events (tempo only for tick conversion).
@@ -405,3 +422,17 @@ Also later: chord-symbol inference, multi-voice notation.
   different instrument, so tuning parsing (M7) must do the reversal.
 - 2026-09-26 — `candidate_positions` returns an empty tuple for pitches the instrument can't play (they are
   legitimate backend output) but raises for invalid MIDI numbers. Candidates are ordered by string number.
+- 2026-09-26 — `AudioTranscriber.transcribe(path)` returns raw `PerformanceEvent`s directly. There is no
+  `AudioNoteEvidence` yet: with one modality it would be a field-for-field copy. Principle 3 still
+  holds, since events from audio carry only audio-derived fields. A modality-specific evidence type is
+  introduced with `fusion/`, when a second modality exists to combine.
+- 2026-09-26 — Basic Pitch `amplitude` maps to `velocity`, not `audio_confidence`. It is an uncalibrated
+  mean activation that upstream itself uses as MIDI velocity, and putting the same number in two fields
+  would double-count it in fusion. `audio_confidence` stays `None` until a backend exposes a real one.
+- 2026-09-26 — Basic Pitch model tuning (thresholds, min note length) are constructor arguments of
+  `BasicPitchTranscriber`, not part of the `AudioTranscriber` protocol. Other backends will have
+  different knobs.
+- 2026-09-26 — Decoder failures are recognized by the exception's module (`audioread`/`soundfile`/`librosa`)
+  and reported as `UnsupportedAudioError`, which avoids importing those libraries. Other failures raise
+  `TranscriptionError`, and backend output that violates domain invariants raises instead of being repaired.
+- 2026-09-26 — pytest excludes `integration` tests by default (`-m "not integration"` in addopts).

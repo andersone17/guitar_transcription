@@ -12,6 +12,15 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = []
 
+[project.optional-dependencies]
+# Audio transcription backend; imported only by audio/backends/basic_pitch.py. Pulls in TensorFlow 2.15.
+basic-pitch = [
+    # Exact pin: the adapter depends on predict()'s return structure (verified for 0.4.0).
+    "basic-pitch==0.4.0",
+    # basic-pitch pins resampy<0.4.3, which imports pkg_resources; setuptools 82 removed it.
+    "setuptools<82",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -24,10 +33,11 @@ packages = ["src/guitar_transcription"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # importlib mode lets tests/ mirror the package layout without __init__.py files or name clashes.
-addopts = ["-ra", "--strict-markers", "--import-mode=importlib"]
+# Integration tests (real model inference) are opt-in: `pytest -m integration`.
+addopts = ["-ra", "--strict-markers", "--import-mode=importlib", "-m", "not integration"]
 xfail_strict = true
 markers = [
-    "integration: runs a real model backend; skipped when the backend extra is not installed",
+    "integration: runs a real model backend (slow); opt in with -m integration; skipped without the extra",
 ]
 
 [tool.ruff]
