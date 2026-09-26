@@ -117,14 +117,18 @@ Headless alternative (if MuseScore's CLI is installed): `mscore -o outputs/my-cl
 
 ## Validating MusicXML against the official schema
 
-Optional; needs network access and `lxml` in a throwaway environment (it is not a project dependency):
+This is automated as an opt-in test, `tests/notation/test_musicxml_schema.py`. Its docstring has the
+three-line setup (download the W3C MusicXML 4.0 XSD to a local folder), then:
 
 ```bash
-mkdir -p /tmp/musicxml-xsd && cd /tmp/musicxml-xsd
-for f in musicxml.xsd xlink.xsd xml.xsd; do
-  curl -sfLO "https://raw.githubusercontent.com/w3c/musicxml/v4.0/schema/$f"; done
-sed -i 's#http://www.musicxml.org/xsd/##' musicxml.xsd   # use the local xml.xsd/xlink.xsd
-cd - && uv run --with lxml python -c "
+MUSICXML_XSD=/tmp/musicxml-xsd/musicxml.xsd \
+    uv run --with lxml pytest -m integration tests/notation/test_musicxml_schema.py
+```
+
+To validate one of your own outputs with the same schema:
+
+```bash
+uv run --with lxml python -c "
 from lxml import etree
 schema = etree.XMLSchema(etree.parse('/tmp/musicxml-xsd/musicxml.xsd'))
 doc = etree.parse('outputs/my-clip.musicxml')

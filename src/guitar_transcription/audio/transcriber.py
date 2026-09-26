@@ -40,18 +40,24 @@ class AudioTranscriber(Protocol):
         ...
 
 
-def check_audio_path(audio_path: str | PathLike[str], supported_suffixes: frozenset[str]) -> Path:
+def check_audio_path(
+    audio_path: str | PathLike[str], supported_suffixes: frozenset[str] | None = None
+) -> Path:
     """Validate a local audio path before handing it to a backend; returns it as a ``Path``.
 
     Backends report unreadable input with confusing library-specific errors (or, worse, after a
     slow model load), so obvious problems are caught up front with a clear message.
+
+    ``supported_suffixes`` is backend-specific: each backend checks its own formats. Callers that
+    don't know which backend will run (e.g. the CLI, before building one) pass ``None`` to check
+    only that the path is a non-empty file.
     """
     path = Path(audio_path)
     if not path.exists():
         raise FileNotFoundError(f"audio file not found: {path}")
     if not path.is_file():
         raise UnsupportedAudioError(f"not a file: {path}")
-    if path.suffix.lower() not in supported_suffixes:
+    if supported_suffixes is not None and path.suffix.lower() not in supported_suffixes:
         supported = ", ".join(sorted(supported_suffixes))
         raise UnsupportedAudioError(
             f"unsupported audio type {path.suffix or '(no extension)'!r} for {path}; "

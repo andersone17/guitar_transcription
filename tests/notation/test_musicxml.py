@@ -275,3 +275,29 @@ def test_exported_rhythm_matches_rhythm_layer(tmp_path: Path) -> None:
         for n in score.stripTies().recurse().notes
     ]
     assert exported == [(e.onset_quarters, e.duration_quarters) for e in quantized.events]
+
+
+def test_rest_across_barline_is_split_into_one_rest_per_measure(tmp_path: Path) -> None:
+    # Quarter on beat 1, then silence until beat 3 of measure 2: a 5-beat rest crossing the barline.
+    score = parse(export(tmp_path, [ev(0.0, 0.5, 60), ev(3.0, 3.5, 64)]))
+
+    elements = [
+        (
+            e.measureNumber,
+            float(e.beat),
+            "rest" if e.isRest else e.nameWithOctave,
+            float(e.quarterLength),
+        )
+        for e in score.recurse().notesAndRests
+    ]
+    rests_by_measure: dict[int, float] = {}
+    for measure, _, kind, length in elements:
+        if kind == "rest":
+            rests_by_measure[measure] = rests_by_measure.get(measure, 0.0) + length
+    assert elements[0] == (1, 1.0, "C4", 1.0)
+    assert rests_by_measure[1] == 3.0  # rest fills measure 1 after the quarter note
+    assert (2, 3.0, "E4", 1.0) in elements  # E4 lands on beat 3 of measure 2
+    assert rests_by_measure[2] == 3.0  # 2 beats before E4 + 1 trailing beat
+    # No element may straddle a barline.
+    for measure in score.parts[0].getElementsByClass(stream.Measure):
+        assert sum(float(e.quarterLength) for e in measure.notesAndRests) == 4.0

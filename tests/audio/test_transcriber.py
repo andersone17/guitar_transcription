@@ -52,3 +52,13 @@ def test_empty_file(tmp_path: Path) -> None:
 def test_error_hierarchy() -> None:
     # Callers can catch every backend problem with one except clause.
     assert issubclass(UnsupportedAudioError, TranscriptionError)
+
+
+def test_suffix_check_is_optional(tmp_path: Path) -> None:
+    # Backend-neutral callers only check that the path is a non-empty file.
+    odd = tmp_path / "take.aiff"
+    odd.write_bytes(b"FORM")
+
+    assert check_audio_path(odd) == odd
+    with pytest.raises(UnsupportedAudioError, match="unsupported audio type"):
+        check_audio_path(odd, WAV_ONLY)

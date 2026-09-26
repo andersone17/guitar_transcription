@@ -51,7 +51,10 @@ Do not build later-stage features (vision, fusion, live capture, GUI) unless the
   tiny generated signals, or fakes implementing the backend protocol.
 - Tests that run a real model are marked `@pytest.mark.integration` and skipped when the backend
   isn't installed.
-- Run `pytest` before declaring work complete; report failures honestly.
+- Tests that need external resources (e.g. the MusicXML schema) are also `integration` and skip with
+  a reason when the resource isn't provided.
+- Before declaring work complete, run `uv run pytest`, `uv run mypy`, `uv run ruff check` and
+  `uv run ruff format --check`, and report failures honestly.
 
 ## Repository hygiene
 

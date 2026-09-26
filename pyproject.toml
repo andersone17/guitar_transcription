@@ -33,6 +33,7 @@ tempo = [
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3",
     "pytest>=8",
     "ruff>=0.6",
 ]
@@ -47,8 +48,23 @@ testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--import-mode=importlib", "-m", "not integration"]
 xfail_strict = true
 markers = [
-    "integration: runs a real model backend (slow); opt in with -m integration; skipped without the extra",
+    "integration: real models or external resources (slow); opt in with -m integration; skips if missing",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_reexport = true
+
+# Optional backends are imported lazily by their adapters and ship no type information.
+[[tool.mypy.overrides]]
+module = ["basic_pitch", "basic_pitch.*", "librosa", "librosa.*", "lxml", "lxml.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100

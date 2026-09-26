@@ -46,6 +46,12 @@ RAW = [
 ]
 
 
+def parse_score(path: Path) -> stream.Score:
+    score = converter.parse(path)
+    assert isinstance(score, stream.Score)
+    return score
+
+
 def perf(events: list[PerformanceEvent]) -> Performance:
     return Performance(events, STANDARD_GUITAR)
 
@@ -94,7 +100,7 @@ def test_end_to_end_with_explicit_tempo(tmp_path: Path) -> None:
     # Raw boundary: JSON holds exactly the transcriber's events, raw seconds intact.
     assert events_from_dict(json.loads(json_path.read_text())) == RAW
     # Notation boundary: the MusicXML carries the quantized rhythm, in 2 measures of 4/4.
-    score = converter.parse(xml_path)
+    score = parse_score(xml_path)
     assert [p.nameWithOctave for p in score.stripTies().pitches] == [
         "G3", "A3", "B3", "C4", "D4", "E4", "F#4",
     ]  # fmt: skip
@@ -152,8 +158,7 @@ def test_estimated_tempo_is_used_rounded_and_reported(tmp_path: Path) -> None:
     assert result.tempo_bpm == 119.99
     assert result.tempo_estimate is not None and result.tempo_estimate.bpm == 119.98765
     assert (
-        converter.parse(xml_path).recurse().getElementsByClass(tempo.MetronomeMark)[0].number
-        == 119.99
+        parse_score(xml_path).recurse().getElementsByClass(tempo.MetronomeMark)[0].number == 119.99
     )
 
 
@@ -187,7 +192,7 @@ def test_no_notes_still_gives_valid_notation(tmp_path: Path) -> None:
     result = notate(perf([]), tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=90))
     path = write_notation(result, tmp_path / "empty.musicxml", title="empty")
 
-    assert len(converter.parse(path).parts[0].getElementsByClass(stream.Measure)) == 1
+    assert len(parse_score(path).parts[0].getElementsByClass(stream.Measure)) == 1
 
 
 def test_strum_reaches_musicxml_as_one_chord(tmp_path: Path) -> None:
@@ -202,7 +207,7 @@ def test_strum_reaches_musicxml_as_one_chord(tmp_path: Path) -> None:
     result = notate(
         perf(strum + melody), tmp_path / "t.wav", NotationRequest(FOUR_FOUR, tempo_bpm=120)
     )
-    score = converter.parse(write_notation(result, tmp_path / "strum.musicxml", title="strum"))
+    score = parse_score(write_notation(result, tmp_path / "strum.musicxml", title="strum"))
 
     first, second = list(score.recurse().notes)[:2]
     assert sorted(p.midi for p in first.pitches) == e_major
@@ -222,7 +227,7 @@ def test_downbeat_request_reaches_rhythm_and_notation(tmp_path: Path) -> None:
     request = NotationRequest(FOUR_FOUR, tempo_bpm=120, downbeat_seconds=2.0)
 
     result = notate(perf(events), tmp_path / "t.wav", request)
-    score = converter.parse(write_notation(result, tmp_path / "p.musicxml", title="p"))
+    score = parse_score(write_notation(result, tmp_path / "p.musicxml", title="p"))
 
     assert result.voiced.origin_seconds == 0.0  # measure 1 starts 2 s (one bar) before 2.0 s
     assert [(n.measureNumber, float(n.beat)) for n in score.recurse().notes] == [(1, 4.0), (2, 1.0)]

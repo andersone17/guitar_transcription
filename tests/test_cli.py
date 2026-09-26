@@ -163,15 +163,36 @@ def test_missing_input(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> No
     assert transcriber.calls == []  # validated before the (slow) model is involved
 
 
-def test_unsupported_input_type(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_file_format_is_decided_by_the_backend_not_the_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Review IMPORTANT 9: the CLI used to reject files using Basic Pitch's format list even when
+    # another transcriber was plugged in. Now a backend that reads .aiff gets .aiff files...
+    take = tmp_path / "take.aiff"
+    take.write_bytes(b"FORM fake aiff")
+    accepting = FakeTranscriber()
+
+    assert run(["transcribe", str(take)], accepting) == EXIT_OK
+    assert accepting.calls == [take]
+
+    # ...and a backend that can't read a file reports it, which the CLI maps to exit code 2.
     notes = tmp_path / "notes.txt"
     notes.write_text("not audio")
+    rejecting = FakeTranscriber(error=UnsupportedAudioError("unsupported audio type '.txt'"))
+
+    assert run(["transcribe", str(notes)], rejecting) == EXIT_BAD_INPUT
+    assert "unsupported audio type '.txt'" in capsys.readouterr().err
+
+
+def test_empty_file_is_rejected_before_the_backend_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    empty = tmp_path / "empty.wav"
+    empty.touch()
     transcriber = FakeTranscriber()
 
-    code = run(["transcribe", str(notes)], transcriber)
-
-    assert code == EXIT_BAD_INPUT
-    assert "unsupported audio type '.txt'" in capsys.readouterr().err
+    assert run(["transcribe", str(empty)], transcriber) == EXIT_BAD_INPUT
+    assert "empty" in capsys.readouterr().err
     assert transcriber.calls == []
 
 

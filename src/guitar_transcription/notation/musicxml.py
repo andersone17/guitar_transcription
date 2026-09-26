@@ -74,7 +74,10 @@ def build_score(performance: QuantizedPerformance, *, title: str | None = None) 
     score.metadata = _metadata(title)
     score.insert(0, part)
     # Measures, barline ties, note types/dots, beams, and trailing rests: spelling only.
-    return score.makeNotation()
+    notated = score.makeNotation()
+    if not isinstance(notated, stream.Score):  # music21 returns an untyped copy of the score
+        raise TypeError(f"music21 makeNotation returned {type(notated).__name__}, not a Score")
+    return notated
 
 
 def _sounding_element(events: Sequence[QuantizedEvent]) -> note.Note | chord.Chord:

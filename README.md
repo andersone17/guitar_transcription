@@ -377,6 +377,7 @@ Requires [uv](https://docs.astral.sh/uv/). Python is pinned to **3.11** (see PLA
 uv python install 3.11      # once; uv sync will also fetch it automatically
 uv sync                     # creates .venv with the package (editable) + dev tools
 uv run pytest               # fast tests (no model inference)
+uv run mypy                 # type check src/ and tests/ (config in pyproject.toml)
 uv run ruff check           # lint
 uv run ruff format --check  # formatting
 ```
@@ -387,7 +388,8 @@ Tests come in three tiers:
 |---|---|---|---|
 | Unit | `uv run pytest` | each module alone, with synthetic events or fakes | ~1 s total |
 | Pipeline contract | `uv run pytest` (in `tests/test_pipeline.py`) | the real rhythm and notation modules chained through `pipeline.py`, with only the model faked through our own protocols; checks what crosses each boundary | included above |
-| Integration | `uv run pytest -m integration` | real Basic Pitch and librosa, including audio → MusicXML through the actual CLI on a synthesized melody | ~10 s; needs `--extra basic-pitch --extra tempo` |
+| Integration | `uv run pytest -m integration` | real Basic Pitch and librosa, including audio → MusicXML through the actual CLI on a synthesized melody, and range edges | ~10 s; needs `--extra basic-pitch --extra tempo` |
+| Schema | `MUSICXML_XSD=… uv run --with lxml pytest -m integration tests/notation/test_musicxml_schema.py` | generated MusicXML validates against the official W3C MusicXML 4.0 XSD | <1 s; skips unless lxml and a local XSD are given (setup in the test's docstring) |
 
-The default run skips integration tests. For a real guitar recording, follow
+The default run skips integration and schema tests. For a real guitar recording, follow
 [docs/manual-testing.md](docs/manual-testing.md).

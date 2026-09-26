@@ -11,10 +11,12 @@ from guitar_transcription.domain import (
 )
 
 
-def note(onset: float, pitch: int, **kwargs: object) -> PerformanceEvent:
+def note(
+    onset: float, pitch: int, string: int | None = None, fret: int | None = None
+) -> PerformanceEvent:
     return PerformanceEvent(
-        onset_seconds=onset, offset_seconds=onset + 0.5, pitch_midi=pitch, **kwargs
-    )  # type: ignore[arg-type]
+        onset_seconds=onset, offset_seconds=onset + 0.5, pitch_midi=pitch, string=string, fret=fret
+    )
 
 
 def test_events_are_sorted_by_onset_then_pitch() -> None:

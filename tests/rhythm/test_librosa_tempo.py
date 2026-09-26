@@ -11,7 +11,7 @@ from guitar_transcription.rhythm import TempoEstimationError
 from guitar_transcription.rhythm.backends.librosa_tempo import LibrosaTempoEstimator
 
 
-class FakeArray(list):  # type: ignore[type-arg]
+class FakeArray(list[Any]):
     """Stands in for a numpy array: librosa results are converted with ``.tolist()``."""
 
     def tolist(self) -> list[Any]:

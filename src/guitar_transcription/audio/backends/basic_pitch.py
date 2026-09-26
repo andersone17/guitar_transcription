@@ -19,6 +19,7 @@ import contextlib
 import importlib
 import io
 import logging
+import math
 import operator
 import os
 import warnings
@@ -173,7 +174,7 @@ def _frequency_limits(pitch_range: tuple[int, int] | None) -> dict[str, float | 
 
 
 def _midi_to_hz(pitch: int) -> float:
-    return 440.0 * 2.0 ** ((pitch - 69) / 12)
+    return 440.0 * math.pow(2.0, (pitch - 69) / 12)
 
 
 @contextlib.contextmanager

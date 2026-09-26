@@ -90,7 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument(
         "audio",
         type=Path,
-        help=f"local audio file ({', '.join(sorted(SUPPORTED_SUFFIXES))})",
+        help=(
+            "local audio file; the default backend (Basic Pitch) reads "
+            f"{', '.join(sorted(SUPPORTED_SUFFIXES))}"
+        ),
     )
     transcribe.add_argument(
         "--json",
@@ -253,7 +256,8 @@ def _transcribe(
 ) -> int:
     # Validate before loading the model, which takes seconds.
     try:
-        path = check_audio_path(args.audio, SUPPORTED_SUFFIXES)
+        # Backend-neutral early check; each backend enforces its own formats in transcribe().
+        path = check_audio_path(args.audio)
     except (FileNotFoundError, UnsupportedAudioError) as error:
         return _fail(error, EXIT_BAD_INPUT)
 

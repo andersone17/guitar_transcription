@@ -694,3 +694,18 @@ Also later: chord-symbol inference, multi-voice notation.
   so string/fret added by future fusion are checked against the real instrument. `performance-events`
   JSON gained an optional `guitar` object (still v1: loaders ignore it, and `guitar_from_dict` reads
   it). Notation doesn't take the config yet; TAB will, for capo-relative frets.
+- 2026-09-26 — Done (review IMPORTANT 9): the CLI no longer validates file formats with Basic Pitch's
+  list. `check_audio_path(path)` without suffixes does the backend-neutral early check (exists, is a
+  file, non-empty), and each backend enforces its own formats in `transcribe()`. The cost: an
+  unsupported extension is reported after the model loads (~3.7 s, measured) instead of instantly,
+  with the same message and exit code 2.
+- 2026-09-26 — Done (review IMPORTANT 8):
+  - `mypy` (2.3) is a dev dependency, configured in `pyproject.toml` (untyped defs disallowed,
+    `warn_return_any`, `warn_unused_ignores`) over `src/` and `tests/`. Missing-stub exceptions
+    cover only the optional backends (basic_pitch, librosa, lxml).
+  - It found `2.0 ** x` typed as `Any` in `_midi_to_hz` and music21's untyped `makeNotation()`
+    result; both are now explicit.
+  - New tests: a rest crossing a barline in MusicXML; backend-edge semantics (range test, strums).
+  - Schema validation is an opt-in `integration` test (`MUSICXML_XSD` + `uv run --with lxml`),
+    because vendoring the 380 KB XSD would break the fixture-size rule and lxml isn't needed at runtime.
+  - AGENTS.md now requires mypy and ruff alongside pytest.
