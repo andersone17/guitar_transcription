@@ -6,7 +6,8 @@ Read `README.md` for the product vision and `PLAN.md` for architecture, stages, 
 ## What this project is
 
 A multimodal automatic guitar transcription system (audio + video of both hands → notation + tablature).
-**We are currently in Stage 1: audio file → pretrained transcription → `PerformanceEvent`s → MIDI/MusicXML.**
+**We are currently in Stage 1: audio file → pretrained transcription → `PerformanceEvent`s → rhythm
+quantization (known tempo/meter) → MIDI/MusicXML.**
 Do not build later-stage features (vision, fusion, live capture, GUI) unless the task explicitly asks for them.
 
 ## Core architectural rules
@@ -21,12 +22,17 @@ Do not build later-stage features (vision, fusion, live capture, GUI) unless the
    `basic_pitch`, `tensorflow`, `mediapipe`, etc. Backend imports are lazy (inside the adapter) so the
    core package imports without heavy optional dependencies installed.
 4. **Dependency direction:** `domain` depends on nothing in this project. `guitar` depends only on `domain`.
-   `audio`, `notation` (and later `vision`, `fusion`) depend on `domain`/`guitar`, never on each other.
-   Only the pipeline/CLI layer wires modules together.
+   `audio`, `rhythm` (and later `vision`, `fusion`) depend on `domain`/`guitar`, never on each other.
+   `notation` may also depend on `rhythm`, because it renders rhythm's output. Only the pipeline/CLI layer
+   wires modules together.
 5. **Keep unknowns explicit.** Fields not yet inferred (string, fret, technique, picking direction,
    vision confidences) are `None`, not guessed defaults. Stage 1 must not pretend to know string/fret.
-6. **Times are in seconds (float) in the domain.** Beats/ticks/divisions exist only inside `notation`.
-   Pitch is MIDI note number (int) in the domain; pitch names are derived.
+6. **Performance time ≠ musical time.** `PerformanceEvent` times are raw seconds as played and are never
+   replaced by quantized values. Quantization creates new objects that reference their source events.
+   Musical time (tempo, meter, measures, beat positions, note values, rests, tuplets) is inferred *only*
+   in `rhythm`. Perception modules emit raw seconds only. `notation` consumes rhythm's output and never
+   infers timing itself (MIDI ticks/MusicXML divisions are just encodings). See PLAN.md §2a.
+7. **Pitch is a MIDI note number (int) in the domain**; pitch names are derived.
 
 ## Code conventions
 

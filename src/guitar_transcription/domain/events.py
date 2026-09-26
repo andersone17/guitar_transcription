@@ -2,6 +2,10 @@
 
 An event records what physically happened, in seconds and MIDI pitch. Anything not yet inferred
 (string/fret, pick direction, per-modality confidences) is ``None``, never a guessed default.
+
+Times are raw performance timing and are never snapped to a beat grid. Musical rhythm (beats,
+measures, note values) is inferred by ``rhythm`` into separate objects that reference these events;
+see PLAN.md section 2a.
 """
 
 import math

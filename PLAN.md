@@ -11,19 +11,26 @@ direction, not commitments.
 1. **The performance is the model; notation is a view.** The core representation is a time-ordered sequence
    of `PerformanceEvent`s in physical time (seconds). MIDI, MusicXML, and tablature are derived from it and
    never fed back in as a source of truth.
-2. **Evidence in, events out.** Perception modules (audio now, vision later) emit *modality-specific
+2. **Performance time is not musical time.** `PerformanceEvent`s carry *raw* timing (seconds) exactly as
+   played, and that timing is never overwritten with quantized values. Musical rhythm (tempo, meter,
+   measures, beat positions, note values, rests, tuplets) is a separate *interpretation* produced by
+   `rhythm/` and linked back to the raw events. Perception (`audio/`, later `vision/`) produces only raw
+   timing, and `notation/` consumes only already-quantized musical time. It never infers rhythm itself.
+   See §2a.
+3. **Evidence in, events out.** Perception modules (audio now, vision later) emit *modality-specific
    evidence* with confidences. Converting evidence into `PerformanceEvent`s is a separate step. In Stage 1
    that step is a trivial 1:1 mapping; later it becomes `fusion/`. Evidence and events are kept separate
    now so that adding vision later doesn't require redesigning the audio path.
-3. **Unknown is explicit.** `string`, `fret`, `technique`, `picking_direction`, and vision confidences are
+4. **Unknown is explicit.** `string`, `fret`, `technique`, `picking_direction`, and vision confidences are
    `None` until something actually infers them. Nothing silently fills in a guess.
-4. **Own the interfaces, rent the models.** Each third-party model sits behind a small `Protocol` we define.
+5. **Own the interfaces, rent the models.** Each third-party model sits behind a small `Protocol` we define.
    Only its adapter imports it, and it's installed as an optional extra.
-5. **Physical configuration is data.** `GuitarConfig` is passed explicitly and determines which pitches
+6. **Physical configuration is data.** `GuitarConfig` is passed explicitly and determines which pitches
    and positions are possible.
-6. **One-way dependencies.** `domain` ← `guitar` ← {`audio`, `notation`, later `vision`, `fusion`} ← `pipeline`/`cli`.
-   Sibling modules never import each other.
-7. **Boring code.** Dataclasses, functions, Protocols. No plugin registries, DI frameworks, or config
+7. **One-way dependencies.** `domain` ← `guitar` ← {`audio`, `rhythm`, later `vision`, `fusion`} ← `pipeline`/`cli`,
+   and `notation` depends on `domain`, `guitar`, and `rhythm` (whose output it renders). Otherwise sibling
+   modules never import each other. In particular, `rhythm` never imports `notation` or `audio`.
+8. **Boring code.** Dataclasses, functions, Protocols. No plugin registries, DI frameworks, or config
    systems until a real need appears.
 
 ## 2. Module boundaries
@@ -43,11 +50,12 @@ src/guitar_transcription/
         transcriber.py   AudioTranscriber Protocol, TranscriptionOptions
         backends/
             basic_pitch.py   BasicPitchTranscriber (sole importer of basic_pitch; lazy import)
-    notation/        # rendering views of a Performance
-        midi.py          performance (unquantized) MIDI export
-        quantize.py      seconds -> beat-grid quantization (pure, backend-free)
-        musicxml.py      quantized events -> MusicXML via music21
-    pipeline.py      # wires audio -> events -> notation for a file
+    rhythm/          # performance time -> musical time (pure Python, no music21)
+        quantize.py      raw events + known tempo/meter -> events placed on a beat/measure grid (M5)
+    notation/        # rendering views; no rhythm inference
+        midi.py          performance MIDI export from raw seconds (no quantization)
+        musicxml.py      quantized rhythm output -> MusicXML via music21 (M6)
+    pipeline.py      # wires audio -> events -> rhythm -> notation for a file
     cli.py           # argparse entry point: `guitar-transcribe`
 tests/               # mirrors package layout; tests/fixtures/ for tiny synthesized inputs
 data/                # git-ignored local datasets/recordings (README.md only is tracked)
@@ -60,6 +68,8 @@ Future modules, not created until their stage: `capture/`, `vision/`, `fusion/`,
 Changes from the suggested layout:
 - `domain/evidence.py` was added so that perception output has a modality-neutral home that `fusion/`
   can later consume without depending on `audio/` or `vision/`.
+- `rhythm/` is split out of `notation/` so that rhythm inference (which later grows into tempo, beat, and
+  meter estimation) is testable without music21 and isn't hidden inside an exporter. See §2a.
 - `pipeline.py` is the only place that knows about more than one module. This keeps the coupling in one
   replaceable spot.
 - There's no top-level `models/` or `weights/` directory. Basic Pitch ships its weights inside its wheel,
@@ -98,7 +108,49 @@ class Performance:                        # domain/performance.py
 
 Conventions: `fret` is the **physical** fret because that's what a camera sees. With a capo at 2, an
 "open" string is `fret == 2`. Notation code converts to capo-relative numbers when rendering tab.
-All times in the domain are seconds, and only `notation/` knows about beats.
+All times in the domain are raw seconds. Beats, measures, and note values first appear in `rhythm/`'s output.
+
+## 2a. Performance timing vs. notated rhythm
+
+Standard notation and tablature both need *musical* rhythm, such as "a dotted eighth on beat 2 of
+measure 5". A recording only gives *performance* timing, such as "a note from 7.183 s to 7.561 s".
+Getting from one to the other is an inference problem with no single right answer, so it gets its own
+stage and module:
+
+```
+audio file
+  → audio/     raw evidence (seconds)
+  → PerformanceEvent[]           raw timing: onset_seconds, offset_seconds (duration derived)
+  → rhythm/    tempo / beat grid, meter, measures, quantized onsets & note values, rests, tuplets
+  → quantized musical events     each one links back to its source PerformanceEvent
+  → notation/  MusicXML (standard notation + TAB), rendering only
+```
+
+Rules:
+- **Raw timing is never replaced.** `PerformanceEvent` is frozen, and quantization produces *new*
+  objects that reference their source events. Raw seconds stay available for performance MIDI,
+  evaluation against annotations, audio/video alignment, fusion, and expressive-timing analysis.
+- **`rhythm/` owns every timing decision**: the tempo/beat grid, meter, measure boundaries, beat
+  positions, note values, which gaps are rests, tuplet grouping, and (later) swing or expressive
+  deviation. It is pure Python with no music21 dependency, so it can be unit-tested with synthetic
+  events.
+- **`notation/` only spells what `rhythm/` decided.** That means splitting notes at barlines into tied
+  notes, choosing note-value symbols and dots, beaming, voices, clefs, and the TAB staff. If `notation/`
+  ever needs to *guess* timing, that logic belongs in `rhythm/`.
+- **Musical time is exact.** Beat positions and durations should use exact rationals (`fractions.Fraction`,
+  in quarter notes) rather than floats, so triplets and other tuplets don't accumulate rounding error.
+- **Performance MIDI is exempt.** `notation/midi.py` writes raw seconds and needs no rhythm analysis.
+  Its tempo exists only to convert seconds to ticks.
+
+Rhythm capability levels (each level keeps the same output types, so notation doesn't change):
+1. **Known tempo + known meter** (user-supplied), a constant grid, and quantization. *Stage 1, M5.*
+2. **Automatic tempo / beat tracking** (possibly a varying beat grid).
+3. **Automatic meter / downbeat estimation.**
+4. **Tempo and meter changes**, tuplet detection beyond a fixed grid, swing, and rubato.
+
+The output types (e.g. a quantized event and whatever represents tempo/meter) are **not designed yet**.
+They're created in M5, shaped by what `quantize` and the MusicXML writer actually need, and they live in
+`rhythm/` (not `domain/`) because they are an interpretation of the performance, not the performance itself.
 
 ## 3. Stage 1 plan: audio file → notation
 
@@ -148,7 +200,7 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - `pyproject.toml` (hatchling, src layout, PEP 735 `dev` dependency group), `.python-version` = 3.11,
   `data/README.md` (+ `raw/`, `processed/`), `docs/` and `notebooks/` placeholders, empty
   `domain/`, `guitar/`, `audio/`, `notation/` subpackages. The `basic-pitch` extra moves to M3 and
-  the `guitar-transcribe` console script to M6, when they have code behind them.
+  the `guitar-transcribe` console script to M7, when they have code behind them.
 - ✅ `uv sync` succeeds without installing TensorFlow or Basic Pitch.
 - ✅ `python -c "import guitar_transcription"` works in that environment.
 - ✅ `pytest` runs (placeholder test passes). `ruff check` and `ruff format --check` are clean.
@@ -192,18 +244,27 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - ✅ Round-trip test: reading the file back with `mido` recovers pitches exactly and times within 1 tick.
 - ✅ Overlapping notes of the same pitch are handled without stuck notes.
 
-**M5 — Quantization and MusicXML export**
-- `quantize(performance, tempo_bpm, time_signature, grid)` is pure: seconds → beat positions snapped to
-  a grid (default 16th notes), with minimum duration of one grid step. Tempo is user-supplied in Stage 1.
+**M5 — Rhythm quantization with known tempo and meter** (`rhythm/`, rhythm level 1)
+- `quantize(performance, tempo_bpm, time_signature, grid)` is pure: raw seconds → exact beat positions
+  snapped to a grid (default 16th notes), with a minimum duration of one grid step. Tempo and meter are
+  user-supplied in Stage 1. The quantized output types are defined here, and each quantized event
+  references its source `PerformanceEvent`.
+- ✅ Exact-grid input is unchanged, jittered input (±20 ms at 120 BPM) snaps correctly, and nothing
+  ends up with zero duration.
+- ✅ Source events are unchanged: after quantization, raw `onset_seconds`/`offset_seconds` are
+  identical and reachable from every quantized event.
+- ✅ Measure/beat positions are correct for 4/4 and 3/4, and the positions are exact (`Fraction`, no float drift).
+- ✅ `rhythm/` does not import music21 or `notation/` (checked by a test).
+
+**M6 — MusicXML export** (`notation/`)
 - `write_musicxml(quantized, path, config)` uses music21 with guitar conventions: treble-8vb clef and
   simultaneous onsets grouped into chords. Overlapping notes are clipped to the next onset in the
-  Stage 1 single-voice simplification.
-- ✅ Quantizer unit tests: exact-grid input is unchanged, jittered input (±20 ms at 120 BPM) snaps
-  correctly, and nothing ends up with zero duration.
+  Stage 1 single-voice simplification. It makes no timing decisions of its own.
 - ✅ Output is well-formed MusicXML: it parses back with music21, and measure count and pitches match input.
+- ✅ Notes crossing a barline come out as tied notes whose total duration equals the quantized duration.
 - ✅ Manual check (documented in `docs/`): a sample output opens in MuseScore 4 and reads sensibly.
 
-**M6 — Pipeline and CLI**
+**M7 — Pipeline and CLI**
 - `guitar-transcribe INPUT.wav --out outputs/ [--tuning E2,A2,D3,G3,B3,E4] [--capo N] [--strings N]
   [--tempo BPM] [--time-signature 4/4] [--onset-threshold …] [--frame-threshold …]`.
 - Writes `<name>.mid`, `<name>.musicxml`, and `<name>.events.json` (the `Performance` serialized; useful
@@ -212,7 +273,7 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - ✅ README "Development" and "Usage" sections are updated with working commands.
 - ✅ No generated files appear in `git status` after running the pipeline.
 
-**Stage 1 done when** M0–M6 pass, and a real recorded guitar clip (not committed) produces MusicXML
+**Stage 1 done when** M0–M7 pass, and a real recorded guitar clip (not committed) produces MusicXML
 that a guitarist judges roughly readable in MuseScore for simple monophonic and chordal material. The
 known limitations are written down in `docs/stage1-notes.md`.
 
@@ -255,8 +316,13 @@ and capo from audio and video, and handle camera angle and left-handed players.
 **Stage 10 — Live transcription.** Streaming audio and video with bounded latency, incremental fusion,
 and a rolling notation view. This may require replacing batch backends.
 
-Also later: rhythm/tempo/meter estimation (instead of user-supplied tempo), chord-symbol inference,
-multi-voice notation.
+**Rhythm track (parallel to Stages 2–10).** Advance `rhythm/` through capability levels 2–4 of §2a:
+beat tracking, then meter/downbeat estimation, then tempo/meter changes, tuplets, and swing. It's
+evaluated against annotated beats/downbeats where datasets provide them. This track depends only on raw
+`PerformanceEvent`s (plus audio features if needed, passed in as evidence), so it can proceed
+independently of the vision stages.
+
+Also later: chord-symbol inference, multi-voice notation.
 
 ## 5. Risks and open research questions
 
@@ -267,8 +333,11 @@ multi-voice notation.
   and spurious notes from string resonance. Stage 2 metrics will quantify this.
 - **Timing precision.** An open upstream issue (#190) reports frame-level temporal drift in Basic Pitch.
   This must be verified before relying on audio onsets for audio/video alignment.
-- **Quantization without known tempo.** Stage 1 sidesteps this with user-supplied tempo. Rubato and free
-  playing will render poorly.
+- **Quantization without known tempo.** Stage 1 sidesteps this with user-supplied tempo and meter. Rubato
+  and free playing will render poorly until the rhythm track matures.
+- **Unreliable offsets.** Transcribed note *ends* are much less precise than onsets (decay, let-ring,
+  damping). Rhythm inference should lean on onsets, and notated durations may need musical rules
+  (e.g. extend to the next onset) rather than raw offsets. Raw offsets are still preserved.
 - **Notation of polyphony.** A single-voice simplification loses independent bass/melody lines.
   Proper voice separation is an open problem.
 - **Webcam frame rate vs. picking speed.** At 30 fps a frame lasts 33 ms, while fast picking and strums
@@ -314,3 +383,8 @@ multi-voice notation.
   parameters (bend amount, slide target) is undecided, and a placeholder enum would be a guess.
 - 2026-09-26 — `Performance` rejects a known string/fret that doesn't sound `pitch_midi`. Harmonics
   and bends (Stage 8) will need this rule relaxed via technique.
+- 2026-09-26 — Raw performance timing and notated rhythm are separate representations. A new `rhythm/`
+  module (split out of `notation/`) owns all timing inference, and `notation/` only renders its output.
+  Quantized types live in `rhythm/`, link to their source `PerformanceEvent`s, and are designed in M5.
+  `PerformanceEvent` needed no field changes: it already stores raw onset/offset seconds and is frozen.
+  The old M5 was split into M5 (rhythm) and M6 (MusicXML), so pipeline/CLI is now M7.

@@ -69,11 +69,29 @@ max fret) defines what's physically possible.
                  guitar/  ──────────▶   fusion/   (candidates, scoring, temporal reasoning)
      (tuning, capo, pitch→string/fret)     │
                                            ▼
-                             domain/  PerformanceEvent sequence
+                             domain/  PerformanceEvent sequence   ← raw timing (seconds)
                                            │
                                            ▼
-                  notation/  (quantization, MIDI, MusicXML, tablature)
+                  rhythm/  (tempo/beat grid, meter, measures, note values, rests, tuplets)
+                                           │  quantized musical time
+                                           ▼
+                  notation/  (MusicXML standard notation + tablature; performance MIDI)
 ```
+
+### Performance timing vs. notated rhythm
+
+A recording tells us *when* things sounded ("7.183 s to 7.561 s"). A score needs *musical* rhythm
+("a dotted eighth on beat 2 of measure 5"). These are kept as two separate representations:
+
+- **`PerformanceEvent`s preserve raw timing** (onset/offset in seconds) exactly as played. That timing
+  is never overwritten by quantized values, because alignment, fusion, evaluation, and expressive
+  analysis all need it.
+- **`rhythm/` interprets that timing musically.** It infers the tempo/beat grid, meter, measures, beat
+  positions, note values, rests, and tuplets, and produces quantized events that link back to their
+  source events. Early on, tempo and meter are supplied by the user. Automatic tempo, meter, and
+  tempo/meter-change estimation come later.
+- **`notation/` only renders** already-quantized musical time. It doesn't guess rhythm. Audio
+  transcription produces raw timing, and notation consumes quantized rhythm.
 
 Modules are loosely coupled. Every third-party model (Basic Pitch today, perhaps MediaPipe or a
 guitar-specific transcription model later) sits behind a small interface we own, so it can be swapped
@@ -82,7 +100,9 @@ without changing the rest of the system.
 ## Stage 1 scope (current focus)
 
 ```
-audio file → pretrained transcription (Spotify Basic Pitch) → PerformanceEvents → MIDI + MusicXML → notation
+audio file → pretrained transcription (Spotify Basic Pitch) → PerformanceEvents (raw timing)
+           → rhythm quantization (user-supplied tempo + meter) → MusicXML → notation
+           (and PerformanceEvents → performance MIDI, unquantized)
 ```
 
 Stage 1 includes:
@@ -90,11 +110,12 @@ Stage 1 includes:
 - a backend-agnostic `AudioTranscriber` interface with a Basic Pitch adapter
 - pitch → candidate (string, fret) enumeration for a `GuitarConfig`, as groundwork for tablature.
   Candidates are enumerated but **not** chosen.
-- export to performance MIDI and to quantized MusicXML that opens in MuseScore
+- rhythm quantization onto a beat/measure grid from a **user-supplied** tempo and time signature
+- export to performance MIDI (raw timing) and to quantized MusicXML that opens in MuseScore
 - a minimal command-line entry point
 
-Stage 1 does **not** include computer vision, fingering selection, technique detection, live capture,
-or any UI.
+Stage 1 does **not** include computer vision, fingering selection, technique detection, automatic
+tempo/meter estimation, live capture, or any UI.
 
 ## Roadmap (high level)
 
@@ -108,6 +129,9 @@ or any UI.
 8. Technique detection (bends, slides, hammer-ons/pull-offs, palm muting, …)
 9. Automatic calibration (fretboard detection, tuning/capo detection)
 10. Live, near-real-time transcription
+
+Alongside these stages, a **rhythm track** progresses from known tempo/meter (Stage 1) to automatic
+tempo/beat tracking, meter estimation, and tempo/meter changes.
 
 Details, acceptance criteria, and open research questions are in [PLAN.md](PLAN.md).
 
