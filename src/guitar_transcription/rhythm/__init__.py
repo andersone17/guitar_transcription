@@ -13,6 +13,7 @@ from guitar_transcription.rhythm.values import (
     TimeSignature,
     rhythmic_duration,
 )
+from guitar_transcription.rhythm.voices import is_single_voice, to_single_voice
 
 __all__ = [
     "NoteValue",
@@ -21,6 +22,8 @@ __all__ = [
     "Rest",
     "RhythmicDuration",
     "TimeSignature",
+    "is_single_voice",
     "quantize",
     "rhythmic_duration",
+    "to_single_voice",
 ]

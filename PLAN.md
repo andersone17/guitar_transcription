@@ -55,10 +55,11 @@ src/guitar_transcription/
     rhythm/          # performance time -> musical time (pure Python, no music21)
         values.py        NoteValue, RhythmicDuration, TimeSignature (measure length, locate)
         quantized.py     QuantizedEvent (source event + onset/duration in quarters), Rest, QuantizedPerformance
-        quantize.py      quantize(events, quarter_note_bpm, time_signature, grid)
+        quantize.py      quantize(events, quarter_note_bpm, time_signature, grid), check_grid
+        voices.py        to_single_voice / is_single_voice (Stage 1 notation simplification)
     notation/        # rendering views; no rhythm inference
-        midi.py          performance MIDI export from raw seconds (no quantization)
-        musicxml.py      quantized rhythm output -> MusicXML via music21 (M6)
+        midi.py          performance MIDI export from raw seconds (no quantization; not built yet)
+        musicxml.py      write_musicxml(QuantizedPerformance) via music21 (sole music21 importer)
     pipeline.py      # wires audio -> events -> rhythm -> notation for a file
     cli.py           # argparse entry point: `guitar-transcribe <command>` (`transcribe` exists)
 tests/               # mirrors package layout; tests/fixtures/ for tiny synthesized inputs
@@ -191,7 +192,7 @@ information hooks for later tablature work, without choosing fingerings.
 | Purpose | Package | Where | Why |
 |---|---|---|---|
 | Transcription backend | `basic-pitch==0.4.0` (+ `setuptools<82`) | optional extra `basic-pitch` (**installed M3**) | Pretrained polyphonic AMT, Apache-2.0, returns note events directly |
-| MusicXML writing | `music21>=10` | core | Mature, BSD-3; handles durations, ties, measures, clefs, chords, and MusicXML export |
+| MusicXML writing | `music21>=10.5,<11` | core (**installed M6**) | Mature, BSD-3; handles durations, ties, measures, clefs, chords, and MusicXML export |
 | MIDI writing | `mido` | core | Tiny, pure-Python (MIT); exact-time performance MIDI without quantization |
 | Tests | `pytest` | `dev` dependency group | Requested standard |
 | Lint/format | `ruff` | `dev` dependency group | One fast tool for lint and format |
@@ -304,10 +305,18 @@ upstream `main` (last commit 2025-11, no API changes since 0.4.0), and a real in
 - ✅ Measure/beat positions are correct for 4/4 and 3/4, and the positions are exact (`Fraction`, no float drift).
 - ✅ `rhythm/` does not import music21 or `notation/` (checked by a test).
 
-**M6 — MusicXML export** (`notation/`)
-- `write_musicxml(quantized, path, config)` uses music21 with guitar conventions: treble-8vb clef and
-  simultaneous onsets grouped into chords. Overlapping notes are clipped to the next onset in the
-  Stage 1 single-voice simplification. It makes no timing decisions of its own.
+**M6 — MusicXML export** (`notation/`) — *done 2026-09-26 (manual MuseScore check pending: not installed)*
+- `write_musicxml(quantized, path, *, title)` uses music21 with guitar conventions: a "Guitar" part,
+  treble-8vb clef with sounding pitches, quarter-note metronome mark, and simultaneous onsets as chords.
+  It makes no timing decisions. Overlap clipping is `rhythm.to_single_voice`, and the exporter *rejects*
+  input that isn't single-voice. Rests come from `QuantizedPerformance.rests()`. music21's
+  `makeNotation` does the spelling: measures, barline ties, dots, beams, final-measure fill.
+  `GuitarConfig` isn't a parameter yet because only TAB needs it.
+- CLI: `transcribe AUDIO --musicxml PATH --tempo BPM --time-signature N/D [--grid VALUE]`. Tempo and meter
+  are required with `--musicxml` (never defaulted), and notation flags without it are usage errors.
+- ✅ Output validates against the official MusicXML 4.0 XSD (checked manually with lxml for 4/4 with
+  ties/chords/dots, 3/4, 6/8 at a fractional tempo, and an empty performance). The procedure is in
+  `docs/manual-testing.md`; it's not in CI because the schema is 380 KB and lxml isn't a dependency.
 - ✅ Output is well-formed MusicXML: it parses back with music21, and measure count and pitches match input.
 - ✅ Notes crossing a barline come out as tied notes whose total duration equals the quantized duration.
 - ✅ Manual check (documented in `docs/`): a sample output opens in MuseScore 4 and reads sensibly.
@@ -486,3 +495,24 @@ Also later: chord-symbol inference, multi-voice notation.
   measure evenly (validated).
 - 2026-09-26 — `rhythm` accepts any iterable of `PerformanceEvent`s, not a `Performance`, because
   quantization needs no `GuitarConfig`. Notation receives the config separately.
+- 2026-09-26 — MusicXML via **music21 10.5** (BSD-3, maintained, Python ≥3.11). Its `makeNotation` does
+  the spelling we'd otherwise hand-write (barline ties, dotted/tied values, rests, beams). It also has
+  the TAB vocabulary for later: `StringIndication`, `FretIndication`, `HammerOn`, `PullOff`, `FretBend`.
+  Hand-written XML would re-implement spelling, and partitura/abjad fit analysis/LilyPond better.
+  music21 is imported only by `notation/musicxml.py`, and the CLI imports that lazily, since music21
+  takes ~1 s to import.
+- 2026-09-26 — Single-voice reduction (clip let-ring at the next onset, chord = shared duration capped at
+  the next onset, duplicate pitch kept once) is a timing decision, so it lives in `rhythm/voices.py`,
+  not the exporter. This supersedes the earlier M6 wording ("clipped in notation").
+- 2026-09-26 — Guitar pitches are written at **sounding** pitch under a treble-8vb clef
+  (`clef-octave-change -1`), with no `<transpose>`. That's the MusicXML convention for octave clefs.
+  music21's default "Music21" composer credit is replaced with an honest
+  `creator type="transcriber"` = guitar-transcription.
+- 2026-09-26 — TAB will attach without changing this design. `QuantizedEvent.source` already carries
+  `string`/`fret` (and later technique), which map to MusicXML `<technical>` via music21 in
+  `_sounding_element`. A TAB staff is a second staff built from the same events plus `GuitarConfig`
+  (tuning, capo-relative frets).
+- 2026-09-26 — Observed on a real scale recording: Basic Pitch notes end ~25% early, so a sixteenth grid
+  shows eighths as sixteenth + rest, and an approximate tempo on an eighth grid merges neighbours into
+  chords. Both are known risks (unreliable offsets, user-supplied tempo). A later rhythm improvement
+  should derive notated durations from inter-onset intervals, not raw offsets.

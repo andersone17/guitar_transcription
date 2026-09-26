@@ -37,11 +37,7 @@ def quantize(
     """
     if not (math.isfinite(quarter_note_bpm) and quarter_note_bpm > 0):
         raise ValueError(f"quarter_note_bpm must be a positive number, got {quarter_note_bpm}")
-    if time_signature.measure_quarters % grid.quarters != 0:
-        raise ValueError(
-            f"a {grid.name.lower()} grid does not divide a {time_signature} measure evenly; "
-            "barlines would fall between grid lines"
-        )
+    check_grid(time_signature, grid)
 
     quantized = []
     for event in events:
@@ -57,6 +53,15 @@ def quantize(
         time_signature=time_signature,
         grid=grid,
     )
+
+
+def check_grid(time_signature: TimeSignature, grid: NoteValue) -> None:
+    """Raise ``ValueError`` unless a measure holds a whole number of grid steps."""
+    if time_signature.measure_quarters % grid.quarters != 0:
+        raise ValueError(
+            f"a {grid.name.lower()} grid does not divide a {time_signature} measure evenly; "
+            "barlines would fall between grid lines"
+        )
 
 
 def seconds_to_quarters(seconds: float, quarter_note_bpm: float) -> float:

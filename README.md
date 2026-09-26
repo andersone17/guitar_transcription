@@ -3,8 +3,9 @@
 A research/engineering project toward **multimodal automatic guitar transcription**: turning a recording
 of a guitarist, both audio and video, into standard notation and tablature that shows *what was actually played*.
 
-> **Current status: Stage 1 (audio-only).** Audio → raw note events works from the command line
-> (see [Usage](#usage)). Rhythm quantization, MIDI, and notation export are next. See [PLAN.md](PLAN.md).
+> **Current status: Stage 1 (audio-only).** Audio → raw note events → quantized standard notation
+> (MusicXML) works from the command line, with tempo and meter supplied by you (see [Usage](#usage)).
+> Tablature, performance MIDI, and automatic tempo/meter are not done yet. See [PLAN.md](PLAN.md).
 
 ## Motivation
 
@@ -203,6 +204,37 @@ with `null` for unknowns:
   ]
 }
 ```
+
+### Standard notation (MusicXML)
+
+Add `--musicxml` to also quantize the notes and write standard notation. Open the file in
+MuseScore, Finale, Dorico, or similar. Tempo and meter are **not inferred yet**, so both are required:
+
+```bash
+uv run guitar-transcribe transcribe path/to/audio.wav \
+    --tempo 120 --time-signature 4/4 \
+    --musicxml outputs/audio.musicxml
+```
+
+| Option | Meaning |
+|---|---|
+| `--musicxml PATH` | Write MusicXML (parent folders are created). |
+| `--tempo BPM` | **Quarter notes** per minute, in every meter. In 6/8 with a dotted-quarter pulse of 80, pass `--tempo 120`. |
+| `--time-signature N/D` | e.g. `4/4`, `3/4`, `6/8`, `2/2`. |
+| `--grid VALUE` | Finest subdivision to snap to: `whole`, `half`, `quarter`, `eighth`, or `sixteenth` (default). |
+
+How it works:
+- The table and `--json` still show **raw** timing. Quantization only affects the MusicXML.
+- Second 0 of the recording is beat 1 of measure 1 (there is no pickup), so silence before the first
+  note becomes a rest. Trim leading silence, or count it in.
+- Notes are snapped to the grid, overlapping notes (let-ring) are shortened into a single voice, and
+  simultaneous notes become chords. Ties across barlines, dots, and rests are handled.
+- The output is one "Guitar" part in treble clef 8vb (guitar sounds an octave lower than written).
+  There is no tablature yet.
+
+Choosing a grid: `sixteenth` keeps the most detail but shows every early note release as a short note
+plus a rest. `eighth` reads more cleanly for simple lines, but notes closer together than an eighth
+merge into chords. A tempo that's slightly off makes both worse, so get it as close as you can.
 
 Keep recordings in `data/raw/` and outputs in `outputs/`. Both are git-ignored.
 

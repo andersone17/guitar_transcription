@@ -10,7 +10,9 @@ readme = "README.md"
 # Upper bound: Basic Pitch 0.4.0 pins tensorflow<2.15.1, whose wheels stop at Python 3.11.
 # Lower bound: music21 10.x requires Python >= 3.11. See PLAN.md "Decision log".
 requires-python = ">=3.11,<3.12"
-dependencies = []
+dependencies = [
+    "music21>=10.5,<11",
+]
 
 [project.scripts]
 guitar-transcribe = "guitar_transcription.cli:main"

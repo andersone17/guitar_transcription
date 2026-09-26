@@ -17,11 +17,13 @@ ALLOWED = {
     "guitar": {"domain", "guitar"},
     "audio": {"domain", "guitar", "audio"},
     "rhythm": {"domain", "rhythm"},
+    "notation": {"domain", "guitar", "rhythm", "notation"},
 }
 
 # The only files allowed to import a given third-party package (backend adapters).
 THIRD_PARTY_OWNERS = {
     "basic_pitch": {"audio/backends/basic_pitch.py"},
+    "music21": {"notation/musicxml.py"},
 }
 
 
@@ -117,3 +119,14 @@ def test_importing_audio_and_adapter_does_not_import_backend() -> None:
 )
 def test_guard_classifies_imports(module: str, allowed: bool) -> None:
     assert is_allowed(module, {"domain"}) is allowed
+
+
+def test_cli_imports_music21_only_when_writing_notation() -> None:
+    # music21 takes ~1 s to import; plain transcription and --help shouldn't pay for it.
+    code = (
+        "import sys, guitar_transcription.cli, guitar_transcription.notation; "
+        "assert 'music21' not in sys.modules"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr

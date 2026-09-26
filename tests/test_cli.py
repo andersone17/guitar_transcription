@@ -286,3 +286,140 @@ def test_console_script_is_registered() -> None:
     [script] = entry_points(group="console_scripts", name="guitar-transcribe")
 
     assert script.value == "guitar_transcription.cli:main"
+
+
+# --- notation output (--musicxml) -----------------------------------------------------------
+
+# At 120 BPM: G3 quarter, quarter rest, E4 half -> one 4/4 measure.
+NOTATION_EVENTS = [
+    PerformanceEvent(onset_seconds=0.01, offset_seconds=0.49, pitch_midi=55, velocity=0.8),
+    PerformanceEvent(onset_seconds=1.02, offset_seconds=1.98, pitch_midi=64, velocity=0.7),
+]
+
+
+def test_help_describes_notation_options(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["transcribe", "--help"])
+
+    out = " ".join(capsys.readouterr().out.split())
+    for flag in ("--musicxml PATH", "--tempo BPM", "--time-signature N/D", "--grid"):
+        assert flag in out
+    assert "quarter notes per minute" in out
+
+
+def test_writes_musicxml(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from music21 import converter, meter, tempo
+
+    out_path = tmp_path / "outputs" / "clip.musicxml"
+    argv = ["transcribe", str(audio_file), "--tempo", "120", "--time-signature", "4/4"]
+
+    code = run([*argv, "--musicxml", str(out_path)], FakeTranscriber(NOTATION_EVENTS))
+
+    assert code == EXIT_OK
+    score = converter.parse(out_path)
+    assert [p.nameWithOctave for p in score.pitches] == ["G3", "E4"]
+    assert [(e.isRest, float(e.quarterLength)) for e in score.recurse().notesAndRests] == [
+        (False, 1.0),
+        (True, 1.0),
+        (False, 2.0),
+    ]
+    assert score.recurse().getElementsByClass(meter.TimeSignature)[0].ratioString == "4/4"
+    assert score.recurse().getElementsByClass(tempo.MetronomeMark)[0].number == 120
+    assert score.metadata.bestTitle == "clip"
+    captured = capsys.readouterr()
+    assert captured.out.startswith("RAW PERFORMANCE TIMING")  # raw table is still printed
+    assert "1.020" in captured.out  # raw, not quantized, timing in the table
+    assert "Wrote MusicXML" in captured.err and "1 measure(s) of 4/4" in captured.err
+
+
+def test_musicxml_with_grid_and_other_meter(audio_file: Path, tmp_path: Path) -> None:
+    from music21 import converter, meter
+
+    out_path = tmp_path / "clip.musicxml"
+    argv = ["transcribe", str(audio_file), "--musicxml", str(out_path), "--tempo", "90"]
+
+    code = run([*argv, "--time-signature", "3/4", "--grid", "eighth"], FakeTranscriber())
+
+    assert code == EXIT_OK
+    score = converter.parse(out_path)
+    assert score.recurse().getElementsByClass(meter.TimeSignature)[0].ratioString == "3/4"
+
+
+def test_json_and_musicxml_together(audio_file: Path, tmp_path: Path) -> None:
+    json_path, xml_path = tmp_path / "e.json", tmp_path / "n.musicxml"
+    argv = ["transcribe", str(audio_file), "--json", str(json_path), "--musicxml", str(xml_path)]
+
+    assert run([*argv, "--tempo", "120", "--time-signature", "4/4"], FakeTranscriber()) == EXIT_OK
+    assert events_from_dict(json.loads(json_path.read_text())) == EVENTS  # raw timing in JSON
+    assert xml_path.exists()
+
+
+def test_overlaps_are_reported_when_shortened(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ringing = [
+        PerformanceEvent(onset_seconds=0.0, offset_seconds=2.0, pitch_midi=40),
+        PerformanceEvent(onset_seconds=0.5, offset_seconds=1.0, pitch_midi=64),
+    ]
+    argv = ["transcribe", str(audio_file), "--musicxml", str(tmp_path / "n.musicxml")]
+
+    assert run([*argv, "--tempo", "120", "--time-signature", "4/4"], FakeTranscriber(ringing)) == 0
+    assert "shortened overlapping notes" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--musicxml", "o.musicxml"], "requires --tempo and --time-signature"),
+        (["--musicxml", "o.musicxml", "--tempo", "120"], "requires --time-signature"),
+        (["--musicxml", "o.musicxml", "--time-signature", "4/4"], "requires --tempo"),
+        (["--tempo", "120"], "--tempo only apply to notation output"),
+        (["--time-signature", "3/4", "--grid", "eighth"], "add --musicxml"),
+        (["--musicxml", "o.musicxml", "--tempo", "0", "--time-signature", "4/4"], "positive"),
+        (
+            ["--musicxml", "o.musicxml", "--tempo", "fast", "--time-signature", "4/4"],
+            "not a number",
+        ),
+        (["--musicxml", "o.musicxml", "--tempo", "120", "--time-signature", "4"], "invalid time"),
+        (["--musicxml", "o.musicxml", "--tempo", "120", "--time-signature", "4/3"], "power of two"),
+        (
+            [
+                "--musicxml",
+                "o.musicxml",
+                "--tempo",
+                "120",
+                "--time-signature",
+                "4/4",
+                "--grid",
+                "32nd",
+            ],
+            "invalid choice",
+        ),
+        (
+            [
+                "--musicxml",
+                "o.musicxml",
+                "--tempo",
+                "120",
+                "--time-signature",
+                "3/8",
+                "--grid",
+                "quarter",
+            ],
+            "does not divide",
+        ),
+    ],
+)
+def test_notation_usage_errors_exit_2_before_transcribing(
+    audio_file: Path, capsys: pytest.CaptureFixture[str], extra: list[str], message: str
+) -> None:
+    transcriber = FakeTranscriber()
+
+    with pytest.raises(SystemExit) as exit_info:
+        run(["transcribe", str(audio_file), *extra], transcriber)
+
+    assert exit_info.value.code == 2
+    assert message in capsys.readouterr().err
+    assert transcriber.calls == []
