@@ -40,12 +40,13 @@ src/guitar_transcription/
     domain/          # pure data; stdlib only
         pitch.py         MIDI pitch validation, MIDI -> pitch name (M2 adds name -> MIDI)
         guitar_config.py GuitarConfig, STANDARD_TUNING, STANDARD_GUITAR
+        position.py      FretboardPosition (string, fret)
         events.py        PerformanceEvent, PickDirection (Technique added in Stage 8)
         performance.py   Performance (sorted events + GuitarConfig)
         evidence.py      AudioNoteEvidence (M3; later FrettingEvidence, PickingEvidence)
     guitar/          # instrument reasoning; pure Python
-        tunings.py       parsing "E2,A2,..." strings, named tunings (M2)
-        positions.py     pitch -> candidate (string, fret) positions under a GuitarConfig
+        positions.py     pitch_for_position, candidate_positions, pitch_range
+        tunings.py       parsing "E2,A2,..." strings, named tunings (M7, for the CLI)
     audio/           # audio perception
         transcriber.py   AudioTranscriber Protocol, TranscriptionOptions
         backends/
@@ -216,11 +217,14 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - ✅ `pitch_name` is derived (e.g. 64 → "E4"; sharps by default).
 - ✅ `domain/` imports nothing outside the standard library (checked by a test).
 
-**M2 — Guitar knowledge**
-- Tuning parsing (`"E2,A2,D3,G3,B3,E4"` and a `STANDARD_6` default, including 7-string/drop tunings via strings),
-  capo handling, playable pitch range, candidate positions.
+**M2 — Guitar knowledge** — *done 2026-09-26*
+- `FretboardPosition` (domain), and `pitch_for_position`, `candidate_positions`, `pitch_range` (guitar),
+  handling arbitrary tunings, string counts, capo, and max fret. There's no fingering choice.
+  Tuning-string parsing (`"E2,A2,D3,G3,B3,E4"`) moves to M7, where the CLI is its first consumer.
 - ✅ Standard tuning, capo 0, max_fret 24: `candidate_positions(64)` returns exactly
   {(1,0),(2,5),(3,9),(4,14),(5,19),(6,24)}.
+- ✅ Invariant, checked exhaustively over several tunings: every candidate sounds the requested pitch,
+  and every playable position appears among its pitch's candidates.
 - ✅ With capo 2, no candidate has `fret < 2`, and open-string pitches shift by +2.
 - ✅ `pitch_range(config)` = (lowest open string + capo, highest open string + max_fret).
 - ✅ Pitches outside the range return no candidates; they do not raise.
@@ -265,6 +269,8 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - ✅ Manual check (documented in `docs/`): a sample output opens in MuseScore 4 and reads sensibly.
 
 **M7 — Pipeline and CLI**
+- `guitar/tunings.py`: parse `--tuning` given low-to-high as players write it (`E2,A2,D3,G3,B3,E4`) into
+  `GuitarConfig.open_strings` order (string 1 first).
 - `guitar-transcribe INPUT.wav --out outputs/ [--tuning E2,A2,D3,G3,B3,E4] [--capo N] [--strings N]
   [--tempo BPM] [--time-signature 4/4] [--onset-threshold …] [--frame-threshold …]`.
 - Writes `<name>.mid`, `<name>.musicxml`, and `<name>.events.json` (the `Performance` serialized; useful
@@ -388,3 +394,14 @@ Also later: chord-symbol inference, multi-voice notation.
   Quantized types live in `rhythm/`, link to their source `PerformanceEvent`s, and are designed in M5.
   `PerformanceEvent` needed no field changes: it already stores raw onset/offset seconds and is frozen.
   The old M5 was split into M5 (rhythm) and M6 (MusicXML), so pipeline/CLI is now M7.
+- 2026-09-26 — `FretboardPosition` lives in `domain/`: it's a config-independent value that events,
+  future vision evidence, and fusion all share. Playability and candidate enumeration (config-dependent
+  reasoning) live in `guitar/`. `guitar.pitch_for_position` is the public API but delegates to
+  `GuitarConfig.pitch_at`, so the position → pitch arithmetic exists once (`Performance` validation in
+  `domain` needs it too).
+- 2026-09-26 — String numbering is positional (tab order): string N = `open_strings[N-1]`, and string 1 is
+  the highest-pitched string on conventional tunings. Pitch order isn't enforced, because re-entrant
+  tunings (Nashville) are real. The cost is that a low-to-high tuple is silently accepted as a valid but
+  different instrument, so tuning parsing (M7) must do the reversal.
+- 2026-09-26 — `candidate_positions` returns an empty tuple for pitches the instrument can't play (they are
+  legitimate backend output) but raises for invalid MIDI numbers. Candidates are ordered by string number.

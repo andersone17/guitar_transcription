@@ -12,10 +12,12 @@ from guitar_transcription.domain.guitar_config import (
 )
 from guitar_transcription.domain.performance import Performance
 from guitar_transcription.domain.pitch import pitch_name
+from guitar_transcription.domain.position import FretboardPosition
 
 __all__ = [
     "STANDARD_GUITAR",
     "STANDARD_TUNING",
+    "FretboardPosition",
     "GuitarConfig",
     "Performance",
     "PerformanceEvent",

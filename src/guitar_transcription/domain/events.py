@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from guitar_transcription.domain.pitch import pitch_name, validate_midi_pitch
+from guitar_transcription.domain.position import FretboardPosition
 
 
 class PickDirection(StrEnum):
@@ -68,10 +69,8 @@ class PerformanceEvent:
 
         if (self.string is None) != (self.fret is None):
             raise ValueError("string and fret must both be set or both be None")
-        if self.string is not None and self.string < 1:
-            raise ValueError(f"string must be >= 1, got {self.string}")
-        if self.fret is not None and self.fret < 0:
-            raise ValueError(f"fret must be >= 0, got {self.fret}")
+        if self.string is not None and self.fret is not None:
+            FretboardPosition(self.string, self.fret)  # validates types and lower bounds
 
         for name in (
             "velocity",

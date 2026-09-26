@@ -8,6 +8,7 @@ Instrument *reasoning* (tuning parsing, candidate positions) belongs in ``guitar
 from dataclasses import dataclass
 
 from guitar_transcription.domain.pitch import MIDI_MAX, validate_midi_pitch
+from guitar_transcription.domain.position import require_int
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,9 +16,11 @@ class GuitarConfig:
     """Strings, tuning, capo, and fret range.
 
     Attributes:
-        open_strings: MIDI pitch of each unfretted string without capo. Index 0 is string 1, the
-            string drawn on the top line of tablature (the highest-pitched one in conventional
-            tunings). Order is not enforced, so re-entrant tunings are representable.
+        open_strings: MIDI pitch of each unfretted string without capo, listed from string 1
+            (top line of tablature) downward. For a conventionally tuned guitar that means
+            highest-pitched first: standard tuning is (E4, B3, G3, D3, A2, E2), the *reverse* of
+            the low-to-high way tunings are usually written. Order is not enforced, so re-entrant
+            tunings (e.g. Nashville tuning) are representable.
         capo: Fret the capo is clamped at; 0 means no capo. Fret numbers elsewhere are physical
             (capo-inclusive), so with ``capo=2`` the lowest playable fret is 2.
         max_fret: Highest playable fret.
@@ -53,8 +56,11 @@ class GuitarConfig:
     def pitch_at(self, string: int, fret: int) -> int:
         """MIDI pitch sounded by ``string`` (1-based) at physical ``fret``.
 
-        Raises ``ValueError`` if the position is not playable on this configuration.
+        Raises ``ValueError`` if the position is not playable on this configuration. This is the
+        single implementation of position -> pitch; ``guitar.pitch_for_position`` is the public API.
         """
+        require_int(string, "string")
+        require_int(fret, "fret")
         if not 1 <= string <= self.num_strings:
             raise ValueError(f"string must be in 1..{self.num_strings}, got {string}")
         if not self.min_fret <= fret <= self.max_fret:
