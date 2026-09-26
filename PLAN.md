@@ -30,13 +30,14 @@ direction, not commitments.
 
 ```
 src/guitar_transcription/
-    domain/          # pure data; no third-party imports
-        events.py        PerformanceEvent, Technique, PickDirection
-        performance.py   Performance (ordered events + metadata + GuitarConfig)
-        evidence.py      AudioNoteEvidence (later: FrettingEvidence, PickingEvidence)
-    guitar/          # instrument knowledge; pure Python
-        config.py        GuitarConfig, standard/named tunings, parsing "E2,A2,..." strings
-        pitch.py         MIDI <-> pitch name helpers
+    domain/          # pure data; stdlib only
+        pitch.py         MIDI pitch validation, MIDI -> pitch name (M2 adds name -> MIDI)
+        guitar_config.py GuitarConfig, STANDARD_TUNING, STANDARD_GUITAR
+        events.py        PerformanceEvent, PickDirection (Technique added in Stage 8)
+        performance.py   Performance (sorted events + GuitarConfig)
+        evidence.py      AudioNoteEvidence (M3; later FrettingEvidence, PickingEvidence)
+    guitar/          # instrument reasoning; pure Python
+        tunings.py       parsing "E2,A2,..." strings, named tunings (M2)
         positions.py     pitch -> candidate (string, fret) positions under a GuitarConfig
     audio/           # audio perception
         transcriber.py   AudioTranscriber Protocol, TranscriptionOptions
@@ -64,31 +65,35 @@ Changes from the suggested layout:
 - There's no top-level `models/` or `weights/` directory. Basic Pitch ships its weights inside its wheel,
   and we don't train anything.
 
-### Key domain types (sketch — finalized in M1)
+### Key domain types (implemented in M1)
 
 ```python
 @dataclass(frozen=True, slots=True)
-class GuitarConfig:
-    open_strings: tuple[int, ...]   # MIDI pitches, index 0 = string 1 = highest-pitched (tab/MusicXML convention)
-    capo: int = 0                   # fret number of capo; 0 = none
+class GuitarConfig:                       # domain/guitar_config.py
+    open_strings: tuple[int, ...]         # MIDI pitches, index 0 = string 1 = top line of tab
+    capo: int = 0                         # fret number of capo; 0 = none
     max_fret: int = 22
-    # num_strings is derived: len(open_strings)
+    # derived: num_strings, min_fret (= capo); method pitch_at(string, fret)
 
 @dataclass(frozen=True, slots=True)
-class PerformanceEvent:
-    onset: float                    # seconds from start of recording
-    offset: float                   # seconds; > onset
-    pitch: int                      # MIDI note number
-    velocity: int | None = None     # 1..127
-    string: int | None = None       # 1-based, 1 = highest-pitched string
-    fret: int | None = None         # physical fret on the neck (not relative to capo); 0 = open
-    technique: Technique | None = None
+class PerformanceEvent:                   # domain/events.py
+    onset_seconds: float                  # seconds from start of recording, >= 0
+    offset_seconds: float                 # > onset_seconds
+    pitch_midi: int                       # MIDI note number (plain int, 0..127)
+    velocity: float | None = None         # normalized loudness 0..1 (notation maps to MIDI 1..127)
+    string: int | None = None             # 1-based; set together with fret
+    fret: int | None = None               # physical fret (capo-inclusive); 0 = open
     pick_direction: PickDirection | None = None
     audio_confidence: float | None = None      # 0..1
     fretting_confidence: float | None = None   # 0..1 (future)
     picking_confidence: float | None = None    # 0..1 (future)
     confidence: float | None = None            # 0..1 overall
-    # pitch_name is a derived property, not a stored field, so it can never disagree with `pitch`.
+    # derived: pitch_name, duration_seconds
+
+@dataclass(frozen=True, slots=True)
+class Performance:                        # domain/performance.py
+    events: tuple[PerformanceEvent, ...]  # always sorted by (onset, pitch)
+    config: GuitarConfig                  # known string/fret must be playable and sound pitch_midi
 ```
 
 Conventions: `fret` is the **physical** fret because that's what a camera sees. With a capo at 2, an
@@ -148,10 +153,13 @@ Basic Pitch facts relevant to the adapter (verified from source on `main`):
 - ✅ `python -c "import guitar_transcription"` works in that environment.
 - ✅ `pytest` runs (placeholder test passes). `ruff check` and `ruff format --check` are clean.
 
-**M1 — Domain model**
-- `GuitarConfig`, `PerformanceEvent`, `Performance`, `Technique`, `PickDirection`, `AudioNoteEvidence`.
-- ✅ Validation rejects `offset <= onset`, confidences outside [0, 1], velocity outside 1–127, and
-  `string` without `fret` (or vice versa). `fret` must be ≥ capo and ≤ max_fret.
+**M1 — Domain model** — *done 2026-09-26*
+- `GuitarConfig`, `PerformanceEvent`, `Performance`, `PickDirection`, `pitch_name`.
+  `AudioNoteEvidence` moves to M3 (its fields are shaped by the adapter that produces it);
+  `Technique` moves to Stage 8.
+- ✅ Validation rejects `offset <= onset`, negative or non-finite times, non-int or out-of-range pitch,
+  velocity/confidences outside [0, 1], and `string` without `fret` (or vice versa). Within a
+  `Performance`, `fret` must be ≥ capo and ≤ max_fret, and string/fret must sound `pitch_midi`.
 - ✅ `Performance` always exposes events sorted by (onset, pitch).
 - ✅ `pitch_name` is derived (e.g. 64 → "E4"; sharps by default).
 - ✅ `domain/` imports nothing outside the standard library (checked by a test).
@@ -294,3 +302,15 @@ multi-voice notation.
 - 2026-09-26 — `ruff format` is scoped to Python sources (`*.md` excluded) so ruff ≥0.16 doesn't rewrite
   the hand-aligned code sketches in docs.
 - 2026-09-26 — Tests use pytest `--import-mode=importlib`, so `tests/` mirrors the package without `__init__.py` files.
+- 2026-09-26 — `GuitarConfig` and MIDI → name live in `domain/`, not `guitar/`: `Performance` holds a
+  config and `PerformanceEvent.pitch_name` needs names, and `domain` may not import `guitar`.
+  `guitar/` keeps instrument *reasoning* (tuning parsing, candidate positions).
+- 2026-09-26 — Event fields carry units in their names (`onset_seconds`, `pitch_midi`). `velocity` is
+  a normalized float 0..1, not MIDI 1..127: backends report loudness on their own scales, and MIDI
+  velocity is an export concern.
+- 2026-09-26 — `pitch_midi` must be a plain `int` (numpy/float rejected), which forces adapters to
+  convert third-party output at the boundary.
+- 2026-09-26 — `technique` is omitted until Stage 8. Whether it's a single value, a set, or carries
+  parameters (bend amount, slide target) is undecided, and a placeholder enum would be a guess.
+- 2026-09-26 — `Performance` rejects a known string/fret that doesn't sound `pitch_midi`. Harmonics
+  and bends (Stage 8) will need this rule relaxed via technique.
