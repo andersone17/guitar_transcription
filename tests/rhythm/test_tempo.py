@@ -141,3 +141,20 @@ def test_long_take_does_not_drift(bpm: float) -> None:
     times = on_frame_grid(beats(bpm, count=200))
 
     assert tempo_from_beat_times(times) == pytest.approx(bpm, rel=0.002)
+
+
+def test_spurious_extra_beats_do_not_bias_the_tempo() -> None:
+    # Regression: an extra beat halfway between two real ones used to count as a whole beat.
+    times = beats(120, count=40)
+    for extra in (5.3 + 0.25, 10.3 + 0.25, 15.3 + 0.25):  # off-beats between real beats
+        times.append(extra)
+    times.sort()
+
+    assert tempo_from_beat_times(times) == pytest.approx(120, rel=1e-6)
+
+
+def test_too_few_consistent_beats() -> None:
+    # Four timestamps with a ~0.9-1.0 s period, but 1.0 is a spurious beat right after 0.9:
+    # only three real beats remain.
+    with pytest.raises(TempoEstimationError, match="consistent beats"):
+        tempo_from_beat_times([0.0, 0.9, 1.0, 2.0])

@@ -709,3 +709,26 @@ Also later: chord-symbol inference, multi-voice notation.
   - Schema validation is an opt-in `integration` test (`MUSICXML_XSD` + `uv run --with lxml`),
     because vendoring the 380 KB XSD would break the fixture-size rule and lxml isn't needed at runtime.
   - AGENTS.md now requires mypy and ruff alongside pytest.
+- 2026-09-26 — Review MINOR items:
+  - **Fixed:**
+    - `--json`/`--musicxml` can't overwrite the input recording (compared after resolving the
+      path), can't be the same file, and can't be a directory (exit 2, before any work).
+    - Unexpected MusicXML-writer errors (music21's own exception types) become a clean exit 1, and
+      earlier outputs are kept.
+    - `TF_CPP_MIN_LOG_LEVEL` is set only while importing Basic Pitch, then restored (a user's value
+      is left alone). TensorFlow reads it at load time, so the import stays quiet without leaking
+      into the process or subprocesses.
+    - `GuitarConfig` rejects non-integer capo/max_fret.
+    - `tempo_from_beat_times` skips spurious beats (at most half a median interval after the previous
+      kept beat) instead of counting them as whole beats, which had biased the tempo (120 → 108.8 in
+      the regression test).
+    - The librosa tempo backend rejects empty files like the audio adapter does.
+    - `velocity` is documented as a backend-reported note strength (Basic Pitch: mean activation),
+      not calibrated loudness or a probability.
+    - `build_score` is now private.
+  - **Kept, deliberately:**
+    - `RhythmicDuration`/`rhythmic_duration`: part of rhythm's public model (rhythm owns note
+      values, §2a) and exposed on `QuantizedEvent`.
+    - music21's matplotlib dependency in the core install: MusicXML is the main output, and moving
+      music21 to an extra would make the default install unable to produce notation. Revisit if
+      install size becomes a problem.

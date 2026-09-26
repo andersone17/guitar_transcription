@@ -107,3 +107,9 @@ def test_rejects_non_positive_max_fret() -> None:
 def test_rejects_range_above_midi() -> None:
     with pytest.raises(ValueError, match="MIDI pitch range"):
         GuitarConfig(open_strings=(120,), max_fret=10)
+
+
+@pytest.mark.parametrize(("capo", "max_fret"), [(1.0, 22), (True, 22), (0, 22.5), (0, "22")])
+def test_rejects_non_int_capo_or_max_fret(capo: object, max_fret: object) -> None:
+    with pytest.raises(TypeError, match="must be an int"):
+        GuitarConfig(STANDARD_TUNING, capo=capo, max_fret=max_fret)  # type: ignore[arg-type]

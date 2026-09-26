@@ -99,3 +99,13 @@ def test_missing_librosa_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(TempoEstimationError, match="--extra tempo"):
         LibrosaTempoEstimator()
+
+
+def test_empty_file_is_an_estimation_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = install_fake_librosa(monkeypatch, [])
+    empty = tmp_path / "empty.wav"
+    empty.touch()
+
+    with pytest.raises(TempoEstimationError, match="empty"):
+        LibrosaTempoEstimator().estimate(empty)
+    assert "load" not in calls

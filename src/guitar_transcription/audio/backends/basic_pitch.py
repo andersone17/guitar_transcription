@@ -180,11 +180,18 @@ def _midi_to_hz(pitch: int) -> float:
 @contextlib.contextmanager
 def _quiet_backend_import() -> Any:
     """Silence known-irrelevant import chatter: TensorFlow's C++ startup logs (CUDA/oneDNN/CPU
-    notices), Basic Pitch's warnings about optional runtimes we don't use, and resampy's
-    ``pkg_resources`` deprecation warning. Real errors still raise. An explicit
-    ``TF_CPP_MIN_LOG_LEVEL`` set by the user is respected.
+    notices, including cuDNN/cuBLAS "factory" lines logged at error level), Basic Pitch's warnings
+    about optional runtimes we don't use, and resampy's ``pkg_resources`` deprecation warning.
+    Failures still raise Python exceptions.
+
+    TensorFlow reads ``TF_CPP_MIN_LOG_LEVEL`` when it loads, so the variable is set only for the
+    import and restored afterwards; it doesn't leak into the rest of the process or subprocesses.
+    A value the user set explicitly is left alone.
     """
-    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+    variable = "TF_CPP_MIN_LOG_LEVEL"
+    user_value = os.environ.get(variable)
+    if user_value is None:
+        os.environ[variable] = "3"
     previous_disable = logging.root.manager.disable
     logging.disable(logging.WARNING)
     try:
@@ -193,3 +200,5 @@ def _quiet_backend_import() -> Any:
             yield
     finally:
         logging.disable(previous_disable)
+        if user_value is None:
+            os.environ.pop(variable, None)

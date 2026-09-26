@@ -37,6 +37,8 @@ class GuitarConfig:
             raise ValueError("a guitar needs at least one string")
         for index, pitch in enumerate(self.open_strings):
             validate_midi_pitch(pitch, what=f"open pitch of string {index + 1}")
+        require_int(self.capo, "capo")
+        require_int(self.max_fret, "max_fret")
         if self.max_fret < 1:
             raise ValueError(f"max_fret must be >= 1, got {self.max_fret}")
         if not 0 <= self.capo < self.max_fret:

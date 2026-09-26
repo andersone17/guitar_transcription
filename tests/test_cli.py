@@ -791,3 +791,78 @@ def test_help_documents_guitar_options(capsys: pytest.CaptureFixture[str]) -> No
         "E2 A2 D3 G3 B3 E4",
     ):
         assert text in out
+
+
+# --- output safety (review MINOR) -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("flag", ["--json", "--musicxml"])
+def test_refuses_to_overwrite_the_input_recording(
+    audio_file: Path, capsys: pytest.CaptureFixture[str], flag: str
+) -> None:
+    original = audio_file.read_bytes()
+    same_file = audio_file.parent / "sub" / ".." / audio_file.name  # same file, different spelling
+    transcriber = FakeTranscriber()
+    notation = ["--tempo", "120", "--time-signature", "4/4"] if flag == "--musicxml" else []
+
+    with pytest.raises(SystemExit) as exit_info:
+        run(["transcribe", str(audio_file), flag, str(same_file), *notation], transcriber)
+
+    assert exit_info.value.code == 2
+    assert "would overwrite the input recording" in capsys.readouterr().err
+    assert audio_file.read_bytes() == original
+    assert transcriber.calls == []
+
+
+def test_refuses_the_same_path_for_json_and_musicxml(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = str(tmp_path / "out.xml")
+    argv = ["transcribe", str(audio_file), "--json", out, "--musicxml", out]
+
+    with pytest.raises(SystemExit) as exit_info:
+        run([*argv, "--tempo", "120", "--time-signature", "4/4"], FakeTranscriber())
+
+    assert exit_info.value.code == 2
+    assert "point to the same file" in capsys.readouterr().err
+
+
+def test_refuses_a_directory_as_output(
+    audio_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        run(["transcribe", str(audio_file), "--json", str(tmp_path)], FakeTranscriber())
+
+    assert exit_info.value.code == 2
+    assert "is a directory" in capsys.readouterr().err
+
+
+def test_unexpected_musicxml_writer_error_is_reported_not_raised(
+    audio_file: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import guitar_transcription.cli as cli
+
+    class Music21Exception(Exception):  # stands in for music21.exceptions21.* errors
+        pass
+
+    def failing_writer(*args: object, **kwargs: object) -> Path:
+        raise Music21Exception("cannot make notation")
+
+    monkeypatch.setattr(cli, "write_notation", failing_writer)
+    json_path = tmp_path / "e.json"
+    argv = ["transcribe", str(audio_file), "--json", str(json_path), "--tempo", "120"]
+
+    code = run(
+        [*argv, "--time-signature", "4/4", "--musicxml", str(tmp_path / "n.musicxml")],
+        FakeTranscriber(),
+    )
+
+    assert code == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "could not write MusicXML (Music21Exception: cannot make notation)" in captured.err
+    assert "Traceback" not in captured.err
+    assert json_path.exists()  # earlier outputs are kept
+    assert captured.out.startswith("RAW PERFORMANCE TIMING")

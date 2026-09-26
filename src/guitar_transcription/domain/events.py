@@ -29,7 +29,10 @@ class PerformanceEvent:
         onset_seconds: Start time, in seconds from the start of the recording.
         offset_seconds: End time, in seconds; strictly after ``onset_seconds``.
         pitch_midi: Sounding MIDI note number (0..127).
-        velocity: Normalized loudness in 0..1. Notation maps it to MIDI velocity when exporting.
+        velocity: Note strength in 0..1 as reported by the transcription backend. It is not
+            calibrated loudness: Basic Pitch reports its mean note activation here (which it
+            also uses as MIDI velocity). What fusion treats as audio confidence is still open
+            (see PLAN.md); don't read this as a probability.
         string: 1-based string number (1 = top line of tablature). Set together with ``fret``.
         fret: Physical fret (capo-inclusive; 0 = open string without capo). Set with ``string``.
         pick_direction: Picking stroke direction, when known.

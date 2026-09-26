@@ -45,14 +45,13 @@ def write_musicxml(
             "MusicXML export needs a single voice: notes overlap or chord tones differ in length. "
             "Apply rhythm.to_single_voice() first."
         )
-    score = build_score(performance, title=title)
+    score = _build_score(performance, title=title)
     output = Path(path)
     score.write("musicxml", fp=output)
     return output
 
 
-def build_score(performance: QuantizedPerformance, *, title: str | None = None) -> stream.Score:
-    """Build the music21 score (exposed for inspection/tests; ``write_musicxml`` is the API)."""
+def _build_score(performance: QuantizedPerformance, *, title: str | None = None) -> stream.Score:
     part = stream.Part()
     part.insert(0, instrument.Guitar())
     part.insert(0, clef.Treble8vbClef())

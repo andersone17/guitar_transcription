@@ -47,6 +47,8 @@ class LibrosaTempoEstimator:
         path = Path(audio_path)
         if not path.is_file():
             raise FileNotFoundError(f"audio file not found: {path}")
+        if path.stat().st_size == 0:
+            raise TempoEstimationError(f"audio file is empty: {path}")
         librosa = self._librosa
         try:
             with warnings.catch_warnings():

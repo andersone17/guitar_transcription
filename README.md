@@ -292,6 +292,7 @@ RAW PERFORMANCE TIMING: seconds from the start of the recording, as played. Not 
 - Progress and errors go to stderr, and the table goes to stdout.
 - Exit codes: `0` success, `2` missing/unreadable input or bad arguments, `1` transcription failure
   (e.g. backend not installed).
+- Outputs that would overwrite the input recording, or each other, are refused before anything runs.
 
 `--json` writes the events for later pipeline stages. The format is `guitar-transcription/performance-events`,
 version 1, defined in `src/guitar_transcription/domain/serialization.py`. Every event field is written,

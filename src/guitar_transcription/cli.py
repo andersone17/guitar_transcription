@@ -70,6 +70,7 @@ def main(
     args = parser.parse_args(argv)
     args.guitar = _build_guitar(parser, args)
     _check_notation_options(parser, args)
+    _check_output_paths(parser, args)
     return _transcribe(args, make_transcriber, make_tempo_estimator)
 
 
@@ -220,6 +221,20 @@ def _build_guitar(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error(f"invalid guitar: {error}")
 
 
+def _check_output_paths(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse outputs that would overwrite the input recording or each other (exit 2)."""
+    audio = args.audio.resolve()
+    outputs = {"--json": args.json, "--musicxml": args.musicxml}
+    resolved = {flag: path.resolve() for flag, path in outputs.items() if path is not None}
+    for flag, path in resolved.items():
+        if path == audio:
+            parser.error(f"{flag} {outputs[flag]} would overwrite the input recording")
+        if path.is_dir():
+            parser.error(f"{flag} {outputs[flag]} is a directory; give a file path")
+    if len(resolved) == 2 and resolved["--json"] == resolved["--musicxml"]:
+        parser.error("--json and --musicxml point to the same file")
+
+
 def _describe_guitar(guitar: GuitarConfig) -> str:
     capo = f"capo {guitar.capo}" if guitar.capo else "no capo"
     return f"{describe_tuning(guitar.open_strings)}, {capo}, {guitar.max_fret} frets"
@@ -316,6 +331,11 @@ def _write_notation(
         write_notation(result, args.musicxml, title=audio_path.stem)
     except OSError as error:
         return _fail(error, EXIT_FAILURE)
+    except Exception as error:  # music21 raises its own exception types; report, don't crash
+        return _fail(
+            RuntimeError(f"could not write MusicXML ({type(error).__name__}: {error})"),
+            EXIT_FAILURE,
+        )
     _report_notation(result, args.musicxml)
     _report_downbeat(result, performance.events, args.downbeat)
     return EXIT_OK

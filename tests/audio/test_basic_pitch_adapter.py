@@ -5,7 +5,9 @@ model, TensorFlow, or numpy is needed. Fake scalar types mimic the numpy types B
 actually returns (int64 pitch, float32 amplitude).
 """
 
+import importlib
 import math
+import os
 import sys
 import types
 from dataclasses import dataclass, field
@@ -330,3 +332,44 @@ def test_invalid_options_are_rejected(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         BasicPitchTranscriber(**kwargs)
+
+
+# --- process environment (review MINOR) -----------------------------------------------------
+
+
+def test_tf_log_level_is_not_left_set_after_loading(
+    backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TF_CPP_MIN_LOG_LEVEL", raising=False)
+
+    BasicPitchTranscriber()
+
+    assert "TF_CPP_MIN_LOG_LEVEL" not in os.environ
+
+
+def test_user_tf_log_level_is_respected(
+    backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TF_CPP_MIN_LOG_LEVEL", "1")
+
+    BasicPitchTranscriber()
+
+    assert os.environ["TF_CPP_MIN_LOG_LEVEL"] == "1"
+
+
+def test_tf_log_level_is_quiet_during_the_backend_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TF_CPP_MIN_LOG_LEVEL", raising=False)
+    seen: list[str | None] = []
+    fake = FakeBackend()
+    fake.install(monkeypatch)
+    real_import = importlib.import_module
+
+    def spying_import(name: str, package: str | None = None) -> types.ModuleType:
+        seen.append(os.environ.get("TF_CPP_MIN_LOG_LEVEL"))
+        return real_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", spying_import)
+
+    BasicPitchTranscriber()
+
+    assert seen and all(value == "3" for value in seen)

@@ -78,7 +78,9 @@ def tempo_from_beat_times(beat_times: Sequence[float]) -> float:
     interval of about k median intervals advances the count by k (so a skipped beat doesn't
     shift later numbers), and the tempo is the least-squares slope of time against beat number.
     Numbering locally matters: counting from the first beat with a slightly-off median interval
-    would drift by a whole beat over a long take.
+    would drift by a whole beat over a long take. A beat that rounds to zero intervals after the
+    previous kept beat (at most half a median interval) is treated as spurious, e.g. an off-beat
+    accent, and skipped, since counting it as a whole beat would bias the tempo.
     """
     if len(beat_times) < MIN_BEATS:
         raise TempoEstimationError(
@@ -88,9 +90,19 @@ def tempo_from_beat_times(beat_times: Sequence[float]) -> float:
     typical = statistics.median(intervals)
     if typical <= 0:
         raise TempoEstimationError("beat times do not advance")
+    kept = [beat_times[0]]
     numbers = [0]
-    for interval in intervals:
-        numbers.append(numbers[-1] + max(1, round(interval / typical)))
+    for time in beat_times[1:]:
+        steps = round((time - kept[-1]) / typical)
+        if steps == 0:
+            continue  # spurious extra beat (at most half an interval after the previous one)
+        kept.append(time)
+        numbers.append(numbers[-1] + steps)
+    if len(kept) < MIN_BEATS:
+        raise TempoEstimationError(
+            f"need at least {MIN_BEATS} consistent beats to estimate a tempo, got {len(kept)}"
+        )
+    beat_times = kept
     mean_n = statistics.fmean(numbers)
     mean_t = statistics.fmean(beat_times)
     spread = sum((n - mean_n) ** 2 for n in numbers)
